@@ -1,7 +1,8 @@
 /**
- * Hybrid Authentication Service
- * - On HTTPS: uses WebAuthn (Face ID / fingerprint / device passcode)
- * - On HTTP: falls back to PIN code
+ * Biometric Authentication Service
+ * Uses WebAuthn to trigger device native authentication:
+ * Face ID / Fingerprint / Device Passcode
+ * Requires HTTPS to function.
  */
 
 import { db } from '../firebase';
@@ -21,14 +22,8 @@ interface StoredCredential {
     registeredAt: string;
 }
 
-interface StoredPIN {
-    pinHash: string;
-    registeredAt: string;
-}
-
 const SETTINGS_DOC = 'biometric';
-const WEBAUTHN_PREFIX = 'bio_cred_';
-const PIN_PREFIX = 'auth_pin_';
+const CRED_PREFIX = 'bio_cred_';
 
 // ============================================================
 // Helpers
@@ -48,14 +43,8 @@ function base64ToBuffer(base64: string): ArrayBuffer {
     return bytes.buffer;
 }
 
-async function hashPIN(pin: string): Promise<string> {
-    const data = new TextEncoder().encode(pin + '_attendance_salt_2024');
-    const hash = await crypto.subtle.digest('SHA-256', data);
-    return Array.from(new Uint8Array(hash)).map(b => b.toString(16).padStart(2, '0')).join('');
-}
-
 // ============================================================
-// Check what's available
+// Availability Check
 // ============================================================
 
 export async function isBiometricAvailable(): Promise<boolean> {
@@ -67,17 +56,11 @@ export async function isBiometricAvailable(): Promise<boolean> {
     }
 }
 
-/** Returns 'webauthn' if Face ID/fingerprint available, otherwise 'pin' */
-export async function getAuthMethod(): Promise<'webauthn' | 'pin'> {
-    const available = await isBiometricAvailable();
-    return available ? 'webauthn' : 'pin';
-}
-
 // ============================================================
-// WebAuthn (Face ID / Fingerprint)
+// Register (auto-called on first verification)
 // ============================================================
 
-async function webauthnRegister(userId: string): Promise<{ success: boolean; error?: string }> {
+async function registerCredential(userId: string): Promise<{ success: boolean; error?: string }> {
     try {
         const challenge = new Uint8Array(32);
         crypto.getRandomValues(challenge);
@@ -107,28 +90,42 @@ async function webauthnRegister(userId: string): Promise<{ success: boolean; err
 
         if (!credential) return { success: false, error: 'فشل التسجيل' };
 
-        localStorage.setItem(WEBAUTHN_PREFIX + userId, JSON.stringify({
+        localStorage.setItem(CRED_PREFIX + userId, JSON.stringify({
             credentialId: bufferToBase64(credential.rawId),
             registeredAt: new Date().toISOString(),
         }));
 
         return { success: true };
     } catch (err: any) {
-        if (err.name === 'NotAllowedError') return { success: false, error: 'تم رفض المصادقة' };
+        if (err.name === 'NotAllowedError') return { success: false, error: 'تم إلغاء المصادقة' };
+        if (err.name === 'SecurityError') return { success: false, error: 'يتطلب اتصال HTTPS آمن' };
         return { success: false, error: err.message || 'فشل التسجيل' };
     }
 }
 
-async function webauthnVerify(userId: string): Promise<{ success: boolean; error?: string }> {
+// ============================================================
+// Verify - triggers device native auth (Face ID / fingerprint / passcode)
+// Auto-registers on first use
+// ============================================================
+
+export async function verifyBiometric(userId: string): Promise<{ success: boolean; error?: string }> {
     try {
-        const storedStr = localStorage.getItem(WEBAUTHN_PREFIX + userId);
+        // Check if WebAuthn is available
+        const available = await isBiometricAvailable();
+        if (!available) {
+            return { success: false, error: 'المصادقة البيومترية غير متاحة. تأكد من استخدام HTTPS' };
+        }
+
+        const storedStr = localStorage.getItem(CRED_PREFIX + userId);
+
+        // Auto-register on first use
         if (!storedStr) {
-            // Auto-register on first use
-            const reg = await webauthnRegister(userId);
+            const reg = await registerCredential(userId);
             if (!reg.success) return reg;
             return { success: true }; // Registration itself verified identity
         }
 
+        // Verify with existing credential
         const stored: StoredCredential = JSON.parse(storedStr);
         const credentialId = base64ToBuffer(stored.credentialId);
         const challenge = new Uint8Array(32);
@@ -138,84 +135,29 @@ async function webauthnVerify(userId: string): Promise<{ success: boolean; error
             publicKey: {
                 challenge,
                 rpId: window.location.hostname,
-                allowCredentials: [{ id: credentialId, type: 'public-key', transports: ['internal'] }],
+                allowCredentials: [{
+                    id: credentialId,
+                    type: 'public-key',
+                    transports: ['internal'],
+                }],
                 userVerification: 'required',
                 timeout: 60000,
             },
         });
 
-        return assertion ? { success: true } : { success: false, error: 'فشل التحقق' };
+        if (!assertion) return { success: false, error: 'فشل التحقق من الهوية' };
+        return { success: true };
     } catch (err: any) {
-        if (err.name === 'NotAllowedError') return { success: false, error: 'تم رفض المصادقة أو انتهت المهلة' };
+        if (err.name === 'NotAllowedError') {
+            return { success: false, error: 'تم إلغاء المصادقة أو انتهت المهلة' };
+        }
         if (err.name === 'InvalidStateError') {
-            localStorage.removeItem(WEBAUTHN_PREFIX + userId);
-            return { success: false, error: 'أعد المحاولة' };
+            // Credential is stale, remove and retry
+            localStorage.removeItem(CRED_PREFIX + userId);
+            return verifyBiometric(userId);
         }
         return { success: false, error: err.message || 'فشل التحقق' };
     }
-}
-
-// ============================================================
-// PIN Fallback
-// ============================================================
-
-export async function registerPIN(userId: string, pin: string): Promise<{ success: boolean; error?: string }> {
-    if (!pin || pin.length < 4 || pin.length > 6 || !/^\d+$/.test(pin)) {
-        return { success: false, error: 'رمز المصادقة يجب أن يكون 4-6 أرقام' };
-    }
-    const pinHash = await hashPIN(pin);
-    localStorage.setItem(PIN_PREFIX + userId, JSON.stringify({
-        pinHash,
-        registeredAt: new Date().toISOString(),
-    }));
-    return { success: true };
-}
-
-export async function verifyPIN(userId: string, pin: string): Promise<{ success: boolean; error?: string }> {
-    const storedStr = localStorage.getItem(PIN_PREFIX + userId);
-    if (!storedStr) return { success: false, error: 'لم يتم تسجيل رمز المصادقة' };
-    if (!pin) return { success: false, error: 'يرجى إدخال الرمز' };
-
-    const stored: StoredPIN = JSON.parse(storedStr);
-    const inputHash = await hashPIN(pin);
-    if (inputHash !== stored.pinHash) return { success: false, error: 'رمز المصادقة غير صحيح' };
-    return { success: true };
-}
-
-export function isPINRegistered(userId: string): boolean {
-    return !!localStorage.getItem(PIN_PREFIX + userId);
-}
-
-export function removePIN(userId: string): void {
-    localStorage.removeItem(PIN_PREFIX + userId);
-}
-
-// ============================================================
-// Unified verification (picks the right method)
-// ============================================================
-
-export async function verifyBiometric(userId: string): Promise<{ success: boolean; error?: string; needsPIN?: boolean }> {
-    const method = await getAuthMethod();
-    if (method === 'webauthn') {
-        return webauthnVerify(userId);
-    }
-    // PIN method - need to show PIN UI
-    if (!isPINRegistered(userId)) {
-        return { success: false, error: 'سجّل رمز المصادقة أولاً من الإعدادات', needsPIN: true };
-    }
-    return { success: false, needsPIN: true }; // Signal to show PIN input
-}
-
-// ============================================================
-// Credential Management
-// ============================================================
-
-export function isBiometricRegistered(userId: string): boolean {
-    return !!localStorage.getItem(WEBAUTHN_PREFIX + userId);
-}
-
-export function removeBiometric(userId: string): void {
-    localStorage.removeItem(WEBAUTHN_PREFIX + userId);
 }
 
 // ============================================================
