@@ -342,26 +342,8 @@ export default function HomePage() {
     // Show verification gate if biometric is enabled and not verified
     const needsVerification = biometricSettings?.enabled && !biometricVerified;
 
-    // Show a non-blocking inline loader while biometric settings are loading
-    if (biometricLoading) {
-        return (
-            <div className="page-content page-enter" style={{
-                display: 'flex', flexDirection: 'column', alignItems: 'center',
-                justifyContent: 'center', minHeight: '60vh', gap: 16,
-            }}>
-                <div style={{
-                    width: 48, height: 48, borderRadius: '50%',
-                    border: '3px solid rgba(255,255,255,0.06)',
-                    borderTopColor: '#818cf8', borderRightColor: '#6366f1',
-                    animation: 'spin 0.7s linear infinite',
-                }} />
-                <div style={{ fontSize: 13, fontWeight: 700, color: 'rgba(255,255,255,0.5)', fontFamily: 'var(--font-arabic)' }}>
-                    جاري التحقق من الإعدادات...
-                </div>
-                <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
-            </div>
-        );
-    }
+    // Biometric verification gate shows only AFTER settings are confirmed loaded and enabled
+    // While loading, biometricSettings is null so needsVerification is false → main page renders immediately
 
 
     if (needsVerification) {
