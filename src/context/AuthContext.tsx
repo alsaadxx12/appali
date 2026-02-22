@@ -213,7 +213,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                     const permission = await Notification.requestPermission();
                     if (permission === 'granted') {
                         const token = await getToken(messaging, {
-                            vapidKey: 'BNn7YwSLzj0dqJH1dM5WyL_5QmS0ybk1fDBJKMOvT2MrG1_sRKKJF3xPjR_B2UvZ3Rk2v0k0y8xPFpGk0qCwSU'
+                            vapidKey: 'BNMSrAcEabXcfbfOw9NZwSuGuI9VhqLe5XFOH4U8fYaug_r7AVGqaXyVErFEN-qzwOYGyppno3H0CJHPdNhTOoA'
                         }).catch(() => null);
                         if (token) {
                             await updateDoc(userRef, { fcmTokens: arrayUnion(token) }).catch(() => { });
