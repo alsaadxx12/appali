@@ -36,10 +36,10 @@ export default function Header({ onNavigateProfile, onNavigateNotifications, onN
     return (
         <header className="app-header" style={{
             justifyContent: 'flex-end',
-            padding: '14px 18px',
-            paddingTop: 'calc(32px + var(--safe-top))',
+            padding: '8px 16px',
+            paddingTop: 'calc(20px + var(--safe-top))',
             gap: 10,
-            minHeight: 56,
+            minHeight: 40,
         }}>
             {/* Chat button */}
             <button
