@@ -1,8 +1,10 @@
 import React, { useState } from 'react';
 import {
     ArrowRight, Plus, Trash2, Edit3, Save, X,
-    Layers, Settings, DollarSign, Utensils, Bus, TrendingUp, FileText, Users, UserCog
+    Layers, Settings, DollarSign, Utensils, Bus, TrendingUp, FileText, Users, UserCog, AlertTriangle
 } from 'lucide-react';
+import { db } from '../../firebase';
+import { collection, getDocs, query, where } from 'firebase/firestore';
 
 interface Props {
     branch: {
@@ -34,6 +36,8 @@ export default function DepartmentPage({ branch, onBack, onUpdateDepartments }: 
     const [settingsId, setSettingsId] = useState<string | null>(null);
     const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
     const [deptName, setDeptName] = useState('');
+    const [deleteBlockMsg, setDeleteBlockMsg] = useState<string | null>(null);
+    const [checkingDelete, setCheckingDelete] = useState(false);
     const [allowanceForm, setAllowanceForm] = useState({
         changeProfits: false, issuanceProfits: false, foodAllowance: 0, transportAllowance: 0,
     });
@@ -57,9 +61,35 @@ export default function DepartmentPage({ branch, onBack, onUpdateDepartments }: 
         setShowAddForm(false);
     };
 
-    const handleDelete = (id: string) => {
-        save(departments.filter(d => d.id !== id));
+    const handleDelete = async (id: string) => {
+        const dept = departments.find(d => d.id === id);
+        if (!dept) return;
+
+        // Check for employees in this department + branch
+        setCheckingDelete(true);
+        setDeleteBlockMsg(null);
+        try {
+            const empQ = query(
+                collection(db, 'users'),
+                where('department', '==', dept.name),
+                where('branch', '==', branch.name)
+            );
+            const empSnap = await getDocs(empQ);
+            if (empSnap.size > 0) {
+                setDeleteBlockMsg(`⚠️ القسم يحتوي على ${empSnap.size} موظف. يجب نقل الموظفين إلى قسم آخر أولاً`);
+                setCheckingDelete(false);
+                return;
+            }
+
+            save(departments.filter(d => d.id !== id));
+        } catch (e) {
+            console.error('Error checking department employees:', e);
+            // Fallback: allow delete if check fails
+            save(departments.filter(d => d.id !== id));
+        }
         setDeleteConfirm(null);
+        setDeleteBlockMsg(null);
+        setCheckingDelete(false);
     };
 
     const handleSaveEdit = (id: string) => {
@@ -233,15 +263,42 @@ export default function DepartmentPage({ branch, onBack, onUpdateDepartments }: 
                                             background: 'var(--accent-blue-soft)', color: 'var(--accent-blue)',
                                             display: 'flex', alignItems: 'center', justifyContent: 'center',
                                         }}><Edit3 size={13} /></button>
-                                        <button onClick={() => deleteConfirm === dept.id ? handleDelete(dept.id) : setDeleteConfirm(dept.id)} style={{
+                                        <button disabled={checkingDelete} onClick={() => {
+                                            if (deleteConfirm === dept.id) {
+                                                handleDelete(dept.id);
+                                            } else {
+                                                setDeleteConfirm(dept.id);
+                                                setDeleteBlockMsg(null);
+                                            }
+                                        }} style={{
                                             width: 30, height: 30, borderRadius: 'var(--radius-sm)',
                                             background: deleteConfirm === dept.id ? 'var(--accent-rose)' : 'var(--accent-rose-soft)',
                                             color: deleteConfirm === dept.id ? 'white' : 'var(--accent-rose)',
                                             display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                            opacity: checkingDelete ? 0.6 : 1,
                                         }}><Trash2 size={13} /></button>
+                                        {deleteConfirm === dept.id && (
+                                            <button onClick={() => { setDeleteConfirm(null); setDeleteBlockMsg(null); }} style={{
+                                                width: 30, height: 30, borderRadius: 'var(--radius-sm)',
+                                                background: 'var(--bg-glass-strong)', color: 'var(--text-secondary)',
+                                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                            }}><X size={13} /></button>
+                                        )}
                                     </div>
                                 )}
                             </div>
+
+                            {/* Delete block message */}
+                            {deleteConfirm === dept.id && deleteBlockMsg && (
+                                <div style={{
+                                    margin: '0 16px 12px', padding: '8px 12px', borderRadius: 'var(--radius-sm)',
+                                    background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.25)',
+                                    display: 'flex', alignItems: 'center', gap: 6,
+                                }}>
+                                    <AlertTriangle size={14} style={{ color: 'var(--accent-amber)', flexShrink: 0 }} />
+                                    <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--accent-amber)' }}>{deleteBlockMsg}</span>
+                                </div>
+                            )}
 
                             {/* Allowance summary chips - always visible */}
                             {!isSettings && !isEditing && (

@@ -7,7 +7,8 @@ import {
 } from 'lucide-react';
 import { AVATAR_COLORS } from '../../data/demoData';
 import { db } from '../../firebase';
-import { collection, getDocs, deleteDoc, doc, updateDoc, setDoc } from 'firebase/firestore';
+import { collection, getDocs, deleteDoc, doc, updateDoc, setDoc, query, where } from 'firebase/firestore';
+import { AlertTriangle, Loader2 } from 'lucide-react';
 
 interface Props {
     onBack: () => void;
@@ -209,6 +210,16 @@ export default function EmployeeManagementPage({ onBack }: Props) {
     const [showAddForm, setShowAddForm] = useState(false);
     const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
     const [isDeptManager, setIsDeptManager] = useState(false);
+    const [saving, setSaving] = useState(false);
+    const [saveMessage, setSaveMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+    const [deleteInfo, setDeleteInfo] = useState<{
+        empId: string;
+        loading: boolean;
+        isManager: string | null;
+        attendanceCount: number;
+        leaveCount: number;
+        checked: boolean;
+    } | null>(null);
 
     const emptyEmployee: Employee = {
         id: '', name: '', department: '', branch: '',
@@ -302,14 +313,65 @@ export default function EmployeeManagementPage({ onBack }: Props) {
         }
     };
 
-    const handleDelete = async (id: string) => {
+    // Check employee dependencies before delete
+    const checkEmployeeDependencies = async (emp: Employee) => {
+        setDeleteInfo({ empId: emp.id, loading: true, isManager: null, attendanceCount: 0, leaveCount: 0, checked: false });
+        setDeleteConfirm(emp.id);
         try {
+            // 1. Is department manager?
+            const mgrDept = isEmployeeDeptManager(emp);
+
+            // 2. Has attendance records?
+            let attCount = 0;
+            try {
+                const attQ = query(collection(db, 'attendance'), where('userId', '==', emp.id));
+                const attSnap = await getDocs(attQ);
+                attCount = attSnap.size;
+            } catch { /* no permission or no collection */ }
+
+            // 3. Has leave records?
+            let lvCount = 0;
+            try {
+                const lvQ = query(collection(db, 'leaves'), where('userId', '==', emp.id));
+                const lvSnap = await getDocs(lvQ);
+                lvCount = lvSnap.size;
+            } catch { /* no permission or no collection */ }
+
+            setDeleteInfo({ empId: emp.id, loading: false, isManager: mgrDept, attendanceCount: attCount, leaveCount: lvCount, checked: true });
+        } catch (e) {
+            console.error('Error checking dependencies:', e);
+            setDeleteInfo({ empId: emp.id, loading: false, isManager: null, attendanceCount: 0, leaveCount: 0, checked: true });
+        }
+    };
+
+    const handleDelete = async (id: string) => {
+        const emp = employees.find(e => e.id === id);
+        if (!emp) return;
+
+        // Block if department manager
+        if (deleteInfo?.isManager) {
+            return; // UI already shows the block message
+        }
+
+        setSaving(true);
+        try {
+            // Clear manager reference if needed
+            const mgrDept = isEmployeeDeptManager(emp);
+            if (mgrDept) {
+                await clearDeptManager(emp.branch, emp.department);
+            }
             await deleteDoc(doc(db, 'users', id));
             setEmployees(employees.filter(e => e.id !== id));
+            setSaveMessage({ type: 'success', text: `تم حذف الموظف ${emp.name} بنجاح` });
         } catch (e) {
             console.error('Error deleting employee:', e);
+            setSaveMessage({ type: 'error', text: 'فشل حذف الموظف — تحقق من الاتصال' });
+        } finally {
+            setSaving(false);
         }
         setDeleteConfirm(null);
+        setDeleteInfo(null);
+        setTimeout(() => setSaveMessage(null), 3000);
     };
 
     const handleToggleActive = async (emp: Employee) => {
@@ -323,6 +385,9 @@ export default function EmployeeManagementPage({ onBack }: Props) {
     };
 
     const handleSaveEdit = async () => {
+        if (saving) return; // Prevent double submit
+        setSaving(true);
+        setSaveMessage(null);
         try {
             // Find original employee to detect department/branch changes
             const origEmp = employees.find(e => e.id === formData.id);
@@ -362,8 +427,14 @@ export default function EmployeeManagementPage({ onBack }: Props) {
             setEditingId(null);
             setFormData(emptyEmployee);
             setIsDeptManager(false);
+            setSaveMessage({ type: 'success', text: 'تم حفظ بيانات الموظف بنجاح ✅' });
+            setTimeout(() => setSaveMessage(null), 3000);
         } catch (e) {
             console.error('Error saving employee:', e);
+            setSaveMessage({ type: 'error', text: 'فشل حفظ البيانات — تحقق من الاتصال بالإنترنت' });
+            setTimeout(() => setSaveMessage(null), 5000);
+        } finally {
+            setSaving(false);
         }
     };
 
@@ -651,21 +722,39 @@ export default function EmployeeManagementPage({ onBack }: Props) {
 
                                 <button
                                     onClick={editingId ? handleSaveEdit : handleAdd}
-                                    disabled={!formData.name.trim()}
+                                    disabled={!formData.name.trim() || saving}
                                     style={{
                                         width: '100%', padding: '13px', borderRadius: 'var(--radius-md)',
-                                        background: formData.name.trim()
-                                            ? 'linear-gradient(135deg, var(--accent-emerald), var(--accent-teal))'
-                                            : 'var(--bg-glass-strong)',
-                                        color: formData.name.trim() ? 'white' : 'var(--text-muted)',
+                                        background: (!formData.name.trim() || saving)
+                                            ? 'var(--bg-glass-strong)'
+                                            : 'linear-gradient(135deg, var(--accent-emerald), var(--accent-teal))',
+                                        color: (!formData.name.trim() || saving) ? 'var(--text-muted)' : 'white',
                                         fontSize: 14, fontWeight: 700,
                                         display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
                                         marginTop: 4, transition: 'all 200ms ease',
+                                        opacity: saving ? 0.7 : 1,
                                     }}
                                 >
-                                    <Save size={16} />
-                                    {editingId ? 'حفظ التعديلات' : 'إضافة الموظف'}
+                                    {saving ? (
+                                        <><Loader2 size={16} style={{ animation: 'spin 1s linear infinite' }} /> جاري الحفظ...</>
+                                    ) : (
+                                        <><Save size={16} /> {editingId ? 'حفظ التعديلات' : 'إضافة الموظف'}</>
+                                    )}
                                 </button>
+
+                                {/* Save feedback message */}
+                                {saveMessage && (
+                                    <div style={{
+                                        marginTop: 8, padding: '8px 12px', borderRadius: 'var(--radius-md)',
+                                        background: saveMessage.type === 'success' ? 'rgba(16,185,129,0.12)' : 'rgba(244,63,94,0.12)',
+                                        border: `1px solid ${saveMessage.type === 'success' ? 'rgba(16,185,129,0.25)' : 'rgba(244,63,94,0.25)'}`,
+                                        color: saveMessage.type === 'success' ? 'var(--accent-emerald)' : 'var(--accent-rose)',
+                                        fontSize: 12, fontWeight: 600, textAlign: 'center',
+                                        animation: 'fadeIn 300ms ease',
+                                    }}>
+                                        {saveMessage.text}
+                                    </div>
+                                )}
                             </div>
                         </div>
                     )}
@@ -744,7 +833,7 @@ export default function EmployeeManagementPage({ onBack }: Props) {
                                             }}>
                                                 <Edit3 size={14} />
                                             </button>
-                                            <button onClick={() => setDeleteConfirm(emp.id)} style={{
+                                            <button onClick={() => checkEmployeeDependencies(emp)} style={{
                                                 width: 32, height: 32, borderRadius: 'var(--radius-sm)',
                                                 background: 'var(--accent-rose-soft)', color: 'var(--accent-rose)',
                                                 display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -768,26 +857,126 @@ export default function EmployeeManagementPage({ onBack }: Props) {
                                         )}
                                     </div>
 
-                                    {/* Delete Confirmation */}
+                                    {/* Delete Confirmation with Dependency Check */}
                                     {isDeleting && (
                                         <div style={{
-                                            marginTop: 10, padding: '10px 12px', borderRadius: 'var(--radius-md)',
-                                            background: 'var(--accent-rose-soft)', border: '1px solid rgba(244,63,94,0.2)',
-                                            display: 'flex', alignItems: 'center', gap: 10,
+                                            marginTop: 10, padding: '14px', borderRadius: 'var(--radius-md)',
+                                            background: 'rgba(244,63,94,0.06)', border: '1px solid rgba(244,63,94,0.18)',
                                         }}>
-                                            <span style={{ flex: 1, fontSize: 12, fontWeight: 600, color: 'var(--accent-rose)' }}>
-                                                هل تريد حذف هذا الموظف؟
-                                            </span>
-                                            <button onClick={() => handleDelete(emp.id)} style={{
-                                                padding: '6px 14px', borderRadius: 'var(--radius-sm)',
-                                                background: 'var(--accent-rose)', color: 'white',
-                                                fontSize: 11, fontWeight: 700,
-                                            }}>حذف</button>
-                                            <button onClick={() => setDeleteConfirm(null)} style={{
-                                                padding: '6px 14px', borderRadius: 'var(--radius-sm)',
-                                                background: 'var(--bg-glass-strong)', color: 'var(--text-secondary)',
-                                                fontSize: 11, fontWeight: 700,
-                                            }}>إلغاء</button>
+                                            {/* Loading */}
+                                            {deleteInfo?.loading && (
+                                                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, padding: 10 }}>
+                                                    <Loader2 size={16} style={{ animation: 'spin 1s linear infinite', color: 'var(--text-muted)' }} />
+                                                    <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>جاري فحص بيانات الموظف...</span>
+                                                </div>
+                                            )}
+
+                                            {/* Dependency results */}
+                                            {deleteInfo?.checked && (
+                                                <>
+                                                    <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--accent-rose)', marginBottom: 10, display: 'flex', alignItems: 'center', gap: 6 }}>
+                                                        <AlertTriangle size={16} />
+                                                        حذف الموظف: {emp.name}
+                                                    </div>
+
+                                                    {/* Manager warning - BLOCKS delete */}
+                                                    {deleteInfo.isManager && (
+                                                        <div style={{
+                                                            padding: '8px 12px', borderRadius: 'var(--radius-sm)',
+                                                            background: 'rgba(245,158,11,0.12)', border: '1px solid rgba(245,158,11,0.25)',
+                                                            marginBottom: 8,
+                                                        }}>
+                                                            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent-amber)', marginBottom: 4, display: 'flex', alignItems: 'center', gap: 4 }}>
+                                                                <Crown size={13} /> مدير قسم {deleteInfo.isManager}
+                                                            </div>
+                                                            <div style={{ fontSize: 11, color: 'var(--accent-amber)', opacity: 0.85 }}>
+                                                                ⚠️ يجب تعيين مدير بديل للقسم أولاً قبل حذف هذا الموظف
+                                                            </div>
+                                                        </div>
+                                                    )}
+
+                                                    {/* Attendance records info */}
+                                                    {deleteInfo.attendanceCount > 0 && (
+                                                        <div style={{
+                                                            padding: '8px 12px', borderRadius: 'var(--radius-sm)',
+                                                            background: 'rgba(59,130,246,0.08)', border: '1px solid rgba(59,130,246,0.15)',
+                                                            marginBottom: 8,
+                                                        }}>
+                                                            <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--accent-blue)' }}>
+                                                                📋 لديه {deleteInfo.attendanceCount} سجل حضور — سيتم حذفها مع الموظف
+                                                            </div>
+                                                        </div>
+                                                    )}
+
+                                                    {/* Leave records info */}
+                                                    {deleteInfo.leaveCount > 0 && (
+                                                        <div style={{
+                                                            padding: '8px 12px', borderRadius: 'var(--radius-sm)',
+                                                            background: 'rgba(168,85,247,0.08)', border: '1px solid rgba(168,85,247,0.15)',
+                                                            marginBottom: 8,
+                                                        }}>
+                                                            <div style={{ fontSize: 11, fontWeight: 600, color: '#a855f7' }}>
+                                                                📝 لديه {deleteInfo.leaveCount} طلب إجازة — سيتم حذفها مع الموظف
+                                                            </div>
+                                                        </div>
+                                                    )}
+
+                                                    {/* No issues */}
+                                                    {!deleteInfo.isManager && deleteInfo.attendanceCount === 0 && deleteInfo.leaveCount === 0 && (
+                                                        <div style={{
+                                                            padding: '8px 12px', borderRadius: 'var(--radius-sm)',
+                                                            background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.15)',
+                                                            marginBottom: 8,
+                                                        }}>
+                                                            <div style={{ fontSize: 11, fontWeight: 600, color: 'var(--accent-emerald)' }}>
+                                                                ✅ لا توجد بيانات مرتبطة — يمكن حذف الموظف بأمان
+                                                            </div>
+                                                        </div>
+                                                    )}
+
+                                                    {/* Actions */}
+                                                    <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                                                        {!deleteInfo.isManager && (
+                                                            <button onClick={() => handleDelete(emp.id)} disabled={saving} style={{
+                                                                flex: 1, padding: '8px 14px', borderRadius: 'var(--radius-sm)',
+                                                                background: 'var(--accent-rose)', color: 'white',
+                                                                fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                                                                opacity: saving ? 0.7 : 1,
+                                                            }}>
+                                                                {saving ? <Loader2 size={14} style={{ animation: 'spin 1s linear infinite' }} /> : <Trash2 size={14} />}
+                                                                تأكيد الحذف
+                                                            </button>
+                                                        )}
+                                                        {deleteInfo.isManager && (
+                                                            <button onClick={() => startEdit(emp)} style={{
+                                                                flex: 1, padding: '8px 14px', borderRadius: 'var(--radius-sm)',
+                                                                background: 'var(--accent-amber)', color: 'white',
+                                                                fontSize: 12, fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                                                            }}>
+                                                                <Edit3 size={14} /> تعديل بيانات الموظف
+                                                            </button>
+                                                        )}
+                                                        <button onClick={() => { setDeleteConfirm(null); setDeleteInfo(null); }} style={{
+                                                            padding: '8px 14px', borderRadius: 'var(--radius-sm)',
+                                                            background: 'var(--bg-glass-strong)', color: 'var(--text-secondary)',
+                                                            fontSize: 12, fontWeight: 700,
+                                                        }}>إلغاء</button>
+                                                    </div>
+                                                </>
+                                            )}
+                                        </div>
+                                    )}
+
+                                    {/* Success/Error feedback toast */}
+                                    {saveMessage && !isDeleting && (
+                                        <div style={{
+                                            marginTop: 8, padding: '8px 12px', borderRadius: 'var(--radius-md)',
+                                            background: saveMessage.type === 'success' ? 'rgba(16,185,129,0.12)' : 'rgba(244,63,94,0.12)',
+                                            border: `1px solid ${saveMessage.type === 'success' ? 'rgba(16,185,129,0.25)' : 'rgba(244,63,94,0.25)'}`,
+                                            color: saveMessage.type === 'success' ? 'var(--accent-emerald)' : 'var(--accent-rose)',
+                                            fontSize: 11, fontWeight: 600, textAlign: 'center',
+                                        }}>
+                                            {saveMessage.text}
                                         </div>
                                     )}
                                 </div>

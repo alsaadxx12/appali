@@ -155,28 +155,30 @@ export default function FrameSettingsPage({ onBack }: Props) {
     const handleSave = async () => {
         setSaving(true);
         try {
-            // Upload base64 images to Firebase Storage and replace with download URLs
-            const uploadedFrames: FrameItem[] = await Promise.all(
-                frames.map(async (frame) => {
-                    // Skip if already a URL (not base64)
-                    if (frame.imageUrl && !frame.imageUrl.startsWith('data:')) {
-                        return frame;
-                    }
-                    // Upload base64 to Storage
-                    if (frame.imageUrl && frame.imageUrl.startsWith('data:')) {
-                        try {
-                            const storageRef = ref(storage, `frames/${frame.id}`);
-                            await uploadString(storageRef, frame.imageUrl, 'data_url');
-                            const downloadUrl = await getDownloadURL(storageRef);
-                            return { ...frame, imageUrl: downloadUrl };
-                        } catch (uploadErr) {
-                            console.error(`Failed to upload frame ${frame.id}:`, uploadErr);
-                            // Keep base64 as fallback for localStorage
-                            return frame;
-                        }
-                    }
+            // Upload base64 images to Firebase Storage with timeout
+            const uploadWithTimeout = async (frame: FrameItem): Promise<FrameItem> => {
+                if (!frame.imageUrl || !frame.imageUrl.startsWith('data:')) {
                     return frame;
-                })
+                }
+                try {
+                    const uploadPromise = (async () => {
+                        const storageRef = ref(storage, `frames/${frame.id}`);
+                        await uploadString(storageRef, frame.imageUrl, 'data_url');
+                        const downloadUrl = await getDownloadURL(storageRef);
+                        return { ...frame, imageUrl: downloadUrl };
+                    })();
+                    const timeoutPromise = new Promise<FrameItem>((_, reject) =>
+                        setTimeout(() => reject(new Error('Upload timeout')), 15000)
+                    );
+                    return await Promise.race([uploadPromise, timeoutPromise]);
+                } catch (uploadErr) {
+                    console.error(`Failed to upload frame ${frame.id}:`, uploadErr);
+                    return frame; // Keep base64 as fallback
+                }
+            };
+
+            const uploadedFrames: FrameItem[] = await Promise.all(
+                frames.map(uploadWithTimeout)
             );
 
             // Save metadata (with Storage URLs) to Firestore
@@ -186,12 +188,17 @@ export default function FrameSettingsPage({ onBack }: Props) {
                 imageUrl: f.imageUrl?.startsWith('data:') ? '' : f.imageUrl,
             }));
 
-            await setDoc(doc(db, 'settings', 'frames'), {
+            // Firestore save with timeout
+            const savePromise = setDoc(doc(db, 'settings', 'frames'), {
                 frames: firestoreFrames,
                 levelFrames,
                 adjustments,
                 updatedAt: new Date().toISOString(),
             });
+            const saveTimeout = new Promise<void>((_, reject) =>
+                setTimeout(() => reject(new Error('Save timeout')), 10000)
+            );
+            await Promise.race([savePromise, saveTimeout]);
 
             // Update local state with uploaded URLs
             setFrames(uploadedFrames);
@@ -206,7 +213,20 @@ export default function FrameSettingsPage({ onBack }: Props) {
             setTimeout(() => setSaved(false), 2000);
         } catch (e: any) {
             console.error('Error saving frame settings:', e);
-            alert(`حدث خطأ أثناء الحفظ: ${e?.message || e}`);
+            // Still save to localStorage even if Firestore fails
+            try {
+                localStorage.setItem('vipFrames', JSON.stringify(frames));
+                localStorage.setItem('vipLevelFrames', JSON.stringify(levelFrames));
+                localStorage.setItem('vipFrameAdjustments', JSON.stringify(adjustments));
+                invalidateFrameCache();
+                setSaved(true);
+                setTimeout(() => setSaved(false), 2000);
+            } catch { /* ignore localStorage errors */ }
+            if (e?.message?.includes('timeout')) {
+                alert('انتهت مهلة الحفظ — تم الحفظ محلياً. تحقق من الاتصال بالإنترنت');
+            } else {
+                alert(`حدث خطأ أثناء الحفظ: ${e?.message || e}`);
+            }
         } finally {
             setSaving(false);
         }

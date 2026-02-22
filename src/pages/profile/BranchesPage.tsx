@@ -5,7 +5,8 @@ import {
 } from 'lucide-react';
 import DepartmentPage, { Department } from './DepartmentPage';
 import { db } from '../../firebase';
-import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc } from 'firebase/firestore';
+import { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, query, where } from 'firebase/firestore';
+import { AlertTriangle } from 'lucide-react';
 
 interface Props {
     onBack: () => void;
@@ -31,6 +32,8 @@ export default function BranchesPage({ onBack }: Props) {
     const [formMode, setFormMode] = useState<FormMode>('none');
     const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
     const [selectedBranch, setSelectedBranch] = useState<string | null>(null);
+    const [deleteBlockMsg, setDeleteBlockMsg] = useState<string | null>(null);
+    const [checkingDelete, setCheckingDelete] = useState(false);
 
     const [branchForm, setBranchForm] = useState({
         id: '', name: '', address: '', latitude: 33.3152, longitude: 44.3661,
@@ -161,13 +164,29 @@ export default function BranchesPage({ onBack }: Props) {
     };
 
     const handleDeleteBranch = async (id: string) => {
+        const branch = branches.find(b => b.id === id);
+        if (!branch) return;
+
+        // Check for employees assigned to this branch
+        setCheckingDelete(true);
+        setDeleteBlockMsg(null);
         try {
+            const empQ = query(collection(db, 'users'), where('branch', '==', branch.name));
+            const empSnap = await getDocs(empQ);
+            if (empSnap.size > 0) {
+                setDeleteBlockMsg(`⚠️ الفرع يحتوي على ${empSnap.size} موظف. يجب نقل أو حذف الموظفين أولاً قبل حذف الفرع`);
+                setCheckingDelete(false);
+                return;
+            }
+
             await deleteDoc(doc(db, 'branches', id));
             setBranches(branches.filter(b => b.id !== id));
         } catch (e) {
             console.error('Error deleting branch:', e);
         }
         setDeleteConfirm(null);
+        setDeleteBlockMsg(null);
+        setCheckingDelete(false);
     };
 
     const startEditBranch = (b: Branch) => {
@@ -480,25 +499,50 @@ export default function BranchesPage({ onBack }: Props) {
                             <InfoChip icon={<MapPin size={11} />} text={`${branch.latitude.toFixed(4)}, ${branch.longitude.toFixed(4)}`} color="var(--accent-teal)" numeric />
                         </div>
 
-                        {/* Action bar */}
                         <div style={{
                             padding: '8px 16px', borderTop: '1px solid var(--border-glass)',
-                            display: 'flex', justifyContent: 'flex-end', gap: 6,
+                            display: 'flex', flexDirection: 'column', gap: 6,
                         }}>
-                            <button onClick={(e) => { e.stopPropagation(); startEditBranch(branch); }} style={{
-                                padding: '6px 14px', borderRadius: 'var(--radius-sm)',
-                                background: 'var(--accent-blue-soft)', color: 'var(--accent-blue)',
-                                display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700,
-                            }}><Edit3 size={12} /> تعديل</button>
-                            <button onClick={(e) => {
-                                e.stopPropagation();
-                                deleteConfirm === branch.id ? handleDeleteBranch(branch.id) : setDeleteConfirm(branch.id);
-                            }} style={{
-                                padding: '6px 14px', borderRadius: 'var(--radius-sm)',
-                                background: deleteConfirm === branch.id ? 'var(--accent-rose)' : 'var(--accent-rose-soft)',
-                                color: deleteConfirm === branch.id ? 'white' : 'var(--accent-rose)',
-                                display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700,
-                            }}><Trash2 size={12} /> {deleteConfirm === branch.id ? 'تأكيد الحذف' : 'حذف'}</button>
+                            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 6 }}>
+                                <button onClick={(e) => { e.stopPropagation(); startEditBranch(branch); }} style={{
+                                    padding: '6px 14px', borderRadius: 'var(--radius-sm)',
+                                    background: 'var(--accent-blue-soft)', color: 'var(--accent-blue)',
+                                    display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700,
+                                }}>‎<Edit3 size={12} /> تعديل</button>
+                                <button onClick={(e) => {
+                                    e.stopPropagation();
+                                    if (deleteConfirm === branch.id) {
+                                        handleDeleteBranch(branch.id);
+                                    } else {
+                                        setDeleteConfirm(branch.id);
+                                        setDeleteBlockMsg(null);
+                                    }
+                                }} disabled={checkingDelete} style={{
+                                    padding: '6px 14px', borderRadius: 'var(--radius-sm)',
+                                    background: deleteConfirm === branch.id ? 'var(--accent-rose)' : 'var(--accent-rose-soft)',
+                                    color: deleteConfirm === branch.id ? 'white' : 'var(--accent-rose)',
+                                    display: 'flex', alignItems: 'center', gap: 4, fontSize: 11, fontWeight: 700,
+                                    opacity: checkingDelete ? 0.6 : 1,
+                                }}><Trash2 size={12} /> {deleteConfirm === branch.id ? 'تأكيد الحذف' : 'حذف'}</button>
+                                {deleteConfirm === branch.id && (
+                                    <button onClick={(e) => { e.stopPropagation(); setDeleteConfirm(null); setDeleteBlockMsg(null); }} style={{
+                                        padding: '6px 14px', borderRadius: 'var(--radius-sm)',
+                                        background: 'var(--bg-glass-strong)', color: 'var(--text-secondary)',
+                                        fontSize: 11, fontWeight: 700,
+                                    }}>إلغاء</button>
+                                )}
+                            </div>
+                            {/* Block message */}
+                            {deleteConfirm === branch.id && deleteBlockMsg && (
+                                <div style={{
+                                    padding: '8px 12px', borderRadius: 'var(--radius-sm)',
+                                    background: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.25)',
+                                    display: 'flex', alignItems: 'center', gap: 6,
+                                }}>
+                                    <AlertTriangle size={14} style={{ color: 'var(--accent-amber)', flexShrink: 0 }} />
+                                    <span style={{ fontSize: 11, fontWeight: 600, color: 'var(--accent-amber)' }}>{deleteBlockMsg}</span>
+                                </div>
+                            )}
                         </div>
                     </div>
                 ))}
