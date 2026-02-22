@@ -90,26 +90,49 @@ export default function HomePage() {
         loadBranch();
     }, [user?.branch]);
 
-    // Load biometric settings & sync Firestore data
+    // Load biometric settings & sync Firestore data (with timeout to prevent hang)
     useEffect(() => {
+        let cancelled = false;
         const loadAndCheck = async () => {
             setBiometricLoading(true);
             try {
-                const settings = await getBiometricSettings();
-                console.log('🔐 Biometric settings loaded:', JSON.stringify(settings));
-                setBiometricSettings(settings);
+                // Race against a 5-second timeout so the page never hangs
+                const settingsPromise = getBiometricSettings();
+                const timeoutPromise = new Promise<null>((resolve) => setTimeout(() => resolve(null), 5000));
+                const settings = await Promise.race([settingsPromise, timeoutPromise]);
+                if (cancelled) return;
+                if (settings) {
+                    console.log('🔐 Biometric settings loaded:', JSON.stringify(settings));
+                    setBiometricSettings(settings as BiometricSettings);
+                } else {
+                    console.warn('🔐 Biometric settings timed out, skipping verification gate');
+                    setBiometricSettings({ enabled: false, required: false });
+                }
                 // Preload biometric data from Firestore into localStorage
                 if (user?.id) {
-                    await ensureBiometricDataLoaded(user.id);
-                    const hasFaceReg = isFaceRegistered(user.id);
-                    console.log('🔐 Face registered:', hasFaceReg);
-                    setHasFace(hasFaceReg);
+                    try {
+                        await Promise.race([
+                            ensureBiometricDataLoaded(user.id),
+                            new Promise<void>((resolve) => setTimeout(resolve, 4000)),
+                        ]);
+                    } catch (e) {
+                        console.warn('🔐 Failed to preload biometric data:', e);
+                    }
+                    if (!cancelled) {
+                        const hasFaceReg = isFaceRegistered(user.id);
+                        console.log('🔐 Face registered:', hasFaceReg);
+                        setHasFace(hasFaceReg);
+                    }
                 }
+            } catch (e) {
+                console.error('🔐 Biometric loading error:', e);
+                if (!cancelled) setBiometricSettings({ enabled: false, required: false });
             } finally {
-                setBiometricLoading(false);
+                if (!cancelled) setBiometricLoading(false);
             }
         };
         loadAndCheck();
+        return () => { cancelled = true; };
     }, [user?.id]);
 
     // Cleanup camera on unmount
@@ -319,14 +342,12 @@ export default function HomePage() {
     // Show verification gate if biometric is enabled and not verified
     const needsVerification = biometricSettings?.enabled && !biometricVerified;
 
-    // Block rendering until biometric settings are loaded to prevent security flash
+    // Show a non-blocking inline loader while biometric settings are loading
     if (biometricLoading) {
         return (
-            <div className="page-enter" style={{
-                position: 'fixed', inset: 0, zIndex: 100,
-                background: 'linear-gradient(160deg, #050810 0%, #0c1221 40%, #0a0f1e 100%)',
+            <div className="page-content page-enter" style={{
                 display: 'flex', flexDirection: 'column', alignItems: 'center',
-                justifyContent: 'center', gap: 16,
+                justifyContent: 'center', minHeight: '60vh', gap: 16,
             }}>
                 <div style={{
                     width: 48, height: 48, borderRadius: '50%',
