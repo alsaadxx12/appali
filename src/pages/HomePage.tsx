@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Clock, MapPin, Timer, AlertTriangle, CheckCircle, Coffee, RefreshCw, Lock, ShieldAlert, Fingerprint, Camera, Scan, Shield } from 'lucide-react';
+import { Clock, MapPin, Timer, AlertTriangle, CheckCircle, Coffee, RefreshCw, Lock, ShieldAlert, Fingerprint, Camera, Scan, Shield, ShieldCheck, Eye } from 'lucide-react';
 import AttendanceButton from '../components/AttendanceButton';
 import StatusCard from '../components/StatusCard';
 import { useAttendance } from '../context/AttendanceContext';
@@ -16,10 +16,13 @@ import {
 } from '../utils/biometricAuth';
 import {
     isFaceRegistered,
-    verifyFace,
+    verifyFaceAdvanced,
     loadFaceModels,
     startCamera,
     stopCamera,
+    detectFace,
+    drawFaceOverlay,
+    FaceScanFrame,
 } from '../utils/faceAuth';
 
 export default function HomePage() {
@@ -36,13 +39,20 @@ export default function HomePage() {
     const [biometricError, setBiometricError] = useState('');
     const [biometricVerified, setBiometricVerified] = useState(false);
     const [biometricLoading, setBiometricLoading] = useState(false);
+    const [verifiedAt, setVerifiedAt] = useState<number | null>(null);
     // Face verification
     const [faceMode, setFaceMode] = useState(false);
     const [faceStatus, setFaceStatus] = useState<'idle' | 'loading' | 'scanning' | 'success' | 'fail'>('idle');
-    const [modelsReady, setModelsReady] = useState(false);
+    const [faceConfidence, setFaceConfidence] = useState(0);
+    const [livenessProgress, setLivenessProgress] = useState(0);
+    const [scanMessage, setScanMessage] = useState('');
     const videoRef = useRef<HTMLVideoElement>(null);
+    const canvasRef = useRef<HTMLCanvasElement>(null);
     const streamRef = useRef<MediaStream | null>(null);
     const scanIntervalRef = useRef<any>(null);
+    const framesRef = useRef<FaceScanFrame[]>([]);
+
+    const SESSION_TIMEOUT = 30 * 60 * 1000; // 30 minutes
 
     // Update clock every second
     useEffect(() => {
@@ -96,6 +106,28 @@ export default function HomePage() {
         };
     }, []);
 
+    // Session timeout — re-lock after 30 minutes
+    useEffect(() => {
+        if (!biometricVerified || !verifiedAt) return;
+        const timer = setTimeout(() => {
+            setBiometricVerified(false);
+            setVerifiedAt(null);
+        }, SESSION_TIMEOUT);
+        return () => clearTimeout(timer);
+    }, [biometricVerified, verifiedAt]);
+
+    // Re-lock when page is hidden (app switch/tab switch)
+    useEffect(() => {
+        const handleVisibility = () => {
+            if (document.hidden && biometricVerified && biometricSettings?.enabled) {
+                setBiometricVerified(false);
+                setVerifiedAt(null);
+            }
+        };
+        document.addEventListener('visibilitychange', handleVisibility);
+        return () => document.removeEventListener('visibilitychange', handleVisibility);
+    }, [biometricVerified, biometricSettings]);
+
     // Get location once branch is loaded
     useEffect(() => {
         if (userBranch) {
@@ -133,6 +165,7 @@ export default function HomePage() {
         setBiometricLoading(false);
         if (result.success) {
             setBiometricVerified(true);
+            setVerifiedAt(Date.now());
             setFaceMode(false);
             cleanupCamera();
         } else {
@@ -151,18 +184,19 @@ export default function HomePage() {
         setFaceMode(true);
         setFaceStatus('loading');
         setBiometricError('');
+        setFaceConfidence(0);
+        setLivenessProgress(0);
+        setScanMessage('جاري تحميل نظام التعرف...');
+        framesRef.current = [];
 
-        // Load models
         const loaded = await loadFaceModels();
         if (!loaded) {
             setBiometricError('فشل تحميل نماذج التعرف على الوجه');
             setFaceStatus('fail');
             return;
         }
-        setModelsReady(true);
 
-        // Start camera
-        await new Promise(r => setTimeout(r, 300));
+        await new Promise(r => setTimeout(r, 400));
         if (!videoRef.current) return;
         const stream = await startCamera(videoRef.current);
         if (!stream) {
@@ -172,29 +206,67 @@ export default function HomePage() {
         }
         streamRef.current = stream;
         setFaceStatus('scanning');
+        setScanMessage('ضع وجهك أمام الكاميرا...');
 
-        // Auto-scan every 2 seconds
+        // Advanced scan with face overlay + liveness
         let attempts = 0;
         scanIntervalRef.current = setInterval(async () => {
-            if (!videoRef.current || !user?.id) return;
+            if (!videoRef.current || !canvasRef.current || !user?.id) return;
             attempts++;
-            const result = await verifyFace(user.id, videoRef.current);
-            if (result.success) {
-                setFaceStatus('success');
-                cleanupCamera();
-                setTimeout(() => {
-                    setBiometricVerified(true);
-                    setFaceMode(false);
-                }, 1000);
-                if (scanIntervalRef.current) clearInterval(scanIntervalRef.current);
-            } else if (attempts >= 15) {
-                // 30 seconds timeout
+
+            // Detect face and draw overlay
+            const frame = await detectFace(videoRef.current);
+            if (frame) {
+                // Verify with liveness
+                const result = await verifyFaceAdvanced(user.id, videoRef.current, framesRef.current);
+                const conf = result.confidence ?? 0;
+                const liveness = result.livenessScore ?? 0;
+                setFaceConfidence(conf);
+                setLivenessProgress(Math.min(liveness, 100));
+
+                drawFaceOverlay(
+                    canvasRef.current, videoRef.current, frame,
+                    conf, result.success ? 'success' : undefined
+                );
+
+                if (result.success) {
+                    setFaceStatus('success');
+                    setScanMessage('✅ تم التحقق بنجاح!');
+                    if (scanIntervalRef.current) clearInterval(scanIntervalRef.current);
+                    setTimeout(() => {
+                        setBiometricVerified(true);
+                        setVerifiedAt(Date.now());
+                        setFaceMode(false);
+                        cleanupCamera();
+                    }, 1200);
+                    return;
+                }
+
+                // Update messages based on progress
+                if (conf > 40 && liveness < 25) {
+                    setScanMessage('🔄 حرّك وجهك قليلاً لكشف الحيوية...');
+                } else if (conf > 70) {
+                    setScanMessage('جاري التحقق من الحيوية...');
+                } else if (conf > 0) {
+                    setScanMessage('جاري مطابقة الوجه...');
+                }
+            } else {
+                // No face detected - clear overlay
+                if (canvasRef.current) {
+                    const ctx = canvasRef.current.getContext('2d');
+                    if (ctx) ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
+                }
+                setScanMessage('لم يتم اكتشاف وجه...');
+            }
+
+            if (attempts >= 20) { // 30 seconds
                 setFaceStatus('fail');
-                setBiometricError('انتهت المهلة. لم يتم التعرف على الوجه.');
+                setScanMessage('انتهت المهلة');
+                setBiometricError('لم يتم التعرف على الوجه. حاول مرة أخرى.');
                 cleanupCamera();
                 if (scanIntervalRef.current) clearInterval(scanIntervalRef.current);
             }
-        }, 2000);
+        }, 1500);
     };
 
     const handleAttendancePress = async () => {
@@ -257,88 +329,114 @@ export default function HomePage() {
                 {/* Face Camera Mode */}
                 {faceMode ? (
                     <div style={{ width: '100%', maxWidth: 380, textAlign: 'center' }}>
+                        {/* Camera Container with Canvas Overlay */}
                         <div style={{
                             position: 'relative', width: '100%', aspectRatio: '3/4',
                             borderRadius: 'var(--radius-lg)', overflow: 'hidden',
                             border: `3px solid ${faceStatus === 'success' ? 'var(--accent-emerald)'
-                                    : faceStatus === 'fail' ? 'var(--accent-rose)'
-                                        : 'var(--accent-blue)'
-                                }`,
-                            background: '#000', marginBottom: 16,
+                                : faceStatus === 'fail' ? 'var(--accent-rose)'
+                                    : 'var(--accent-blue)'}`,
+                            background: '#000', marginBottom: 12,
                         }}>
-                            <video
-                                ref={videoRef}
-                                autoPlay playsInline muted
-                                style={{
-                                    width: '100%', height: '100%', objectFit: 'cover',
-                                    transform: 'scaleX(-1)',
-                                }}
-                            />
-                            {/* Scanning overlay */}
+                            <video ref={videoRef} autoPlay playsInline muted style={{
+                                width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)',
+                            }} />
+                            {/* Face overlay canvas — draws bounding box + 68 landmarks */}
+                            <canvas ref={canvasRef} style={{
+                                position: 'absolute', inset: 0, width: '100%', height: '100%',
+                                transform: 'scaleX(-1)', pointerEvents: 'none',
+                            }} />
+
+                            {/* Top HUD — confidence + liveness */}
                             {faceStatus === 'scanning' && (
                                 <div style={{
-                                    position: 'absolute', inset: 0,
-                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                    position: 'absolute', top: 8, left: 8, right: 8,
+                                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                                 }}>
                                     <div style={{
-                                        width: 200, height: 250, borderRadius: '50%',
-                                        border: '3px dashed rgba(59,130,246,0.6)',
-                                        animation: 'leavePendingPulse 2s ease-in-out infinite',
+                                        background: 'rgba(0,0,0,0.6)', borderRadius: 20, padding: '4px 10px',
+                                        fontSize: 11, fontWeight: 700, color: faceConfidence > 60 ? '#10b981' : '#f59e0b',
+                                        display: 'flex', alignItems: 'center', gap: 4,
+                                    }}>
+                                        <Eye size={12} />
+                                        تطابق: {faceConfidence}%
+                                    </div>
+                                    <div style={{
+                                        background: 'rgba(0,0,0,0.6)', borderRadius: 20, padding: '4px 10px',
+                                        fontSize: 11, fontWeight: 700, color: livenessProgress > 30 ? '#10b981' : '#f59e0b',
+                                    }}>
+                                        حيوية: {livenessProgress}%
+                                    </div>
+                                </div>
+                            )}
+
+                            {/* Liveness progress bar */}
+                            {faceStatus === 'scanning' && (
+                                <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 4, background: 'rgba(0,0,0,0.4)' }}>
+                                    <div style={{
+                                        height: '100%', borderRadius: 2,
+                                        background: livenessProgress > 30 ? '#10b981' : '#3b82f6',
+                                        width: `${Math.min(livenessProgress, 100)}%`,
+                                        transition: 'width 300ms ease',
                                     }} />
                                 </div>
                             )}
+
                             {/* Success overlay */}
                             {faceStatus === 'success' && (
-                                <div style={{
-                                    position: 'absolute', inset: 0,
-                                    background: 'rgba(16,185,129,0.3)',
-                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                }}>
-                                    <CheckCircle size={64} style={{ color: '#fff' }} />
+                                <div style={{ position: 'absolute', inset: 0, background: 'rgba(16,185,129,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                    <div style={{ textAlign: 'center', color: 'white' }}>
+                                        <CheckCircle size={64} />
+                                        <div style={{ fontSize: 18, fontWeight: 800, marginTop: 8 }}>تم التحقق!</div>
+                                    </div>
                                 </div>
                             )}
-                            {/* Loading models */}
+
+                            {/* Loading overlay */}
                             {faceStatus === 'loading' && (
-                                <div style={{
-                                    position: 'absolute', inset: 0,
-                                    background: 'rgba(0,0,0,0.7)',
-                                    display: 'flex', flexDirection: 'column',
-                                    alignItems: 'center', justifyContent: 'center', gap: 12,
-                                    color: 'white',
-                                }}>
+                                <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, color: 'white' }}>
                                     <Scan size={36} style={{ animation: 'spin 1.5s linear infinite' }} />
                                     <div style={{ fontSize: 13, fontWeight: 600 }}>جاري تحميل نظام التعرف...</div>
+                                    <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.5)' }}>قد يستغرق بضع ثواني</div>
                                 </div>
                             )}
                         </div>
 
-                        <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>
-                            {faceStatus === 'scanning' ? 'جاري المسح... ضع وجهك أمام الكاميرا'
-                                : faceStatus === 'success' ? '✅ تم التحقق بنجاح!'
-                                    : faceStatus === 'loading' ? 'جاري التحميل...'
-                                        : 'فشل التحقق'}
+                        {/* Dynamic Status Text */}
+                        <div style={{
+                            fontSize: 14, fontWeight: 700, marginBottom: 4, color:
+                                faceStatus === 'success' ? 'var(--accent-emerald)' : faceStatus === 'fail' ? 'var(--accent-rose)' : 'var(--text-primary)'
+                        }}>
+                            {scanMessage}
                         </div>
 
                         {biometricError && (
-                            <div style={{
-                                fontSize: 12, color: 'var(--accent-rose)', fontWeight: 600,
-                                margin: '8px 0', padding: '8px 12px', borderRadius: 'var(--radius-sm)',
-                                background: 'rgba(244,63,94,0.08)',
-                            }}>
+                            <div style={{ fontSize: 12, color: 'var(--accent-rose)', fontWeight: 600, margin: '8px 0', padding: '8px 12px', borderRadius: 'var(--radius-sm)', background: 'rgba(244,63,94,0.08)' }}>
                                 {biometricError}
                             </div>
                         )}
 
-                        <button
-                            onClick={() => { setFaceMode(false); cleanupCamera(); setFaceStatus('idle'); setBiometricError(''); }}
-                            style={{
-                                marginTop: 12, padding: '12px 24px', borderRadius: 'var(--radius-md)',
-                                background: 'var(--bg-glass)', border: '1px solid var(--border-glass)',
-                                color: 'var(--text-secondary)', fontSize: 13, fontWeight: 700, cursor: 'pointer',
-                            }}
-                        >
-                            رجوع
-                        </button>
+                        <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                            {faceStatus === 'fail' && (
+                                <button onClick={handleFaceVerify} style={{
+                                    flex: 1, padding: '12px', borderRadius: 'var(--radius-md)',
+                                    background: 'linear-gradient(135deg, #10b981, #06b6d4)',
+                                    border: 'none', color: 'white', fontSize: 13, fontWeight: 700, cursor: 'pointer',
+                                }}>
+                                    إعادة المحاولة
+                                </button>
+                            )}
+                            <button
+                                onClick={() => { setFaceMode(false); cleanupCamera(); setFaceStatus('idle'); setBiometricError(''); setScanMessage(''); framesRef.current = []; }}
+                                style={{
+                                    flex: faceStatus === 'fail' ? 0 : 1, padding: '12px 20px', borderRadius: 'var(--radius-md)',
+                                    background: 'var(--bg-glass)', border: '1px solid var(--border-glass)',
+                                    color: 'var(--text-secondary)', fontSize: 13, fontWeight: 700, cursor: 'pointer',
+                                }}
+                            >
+                                رجوع
+                            </button>
+                        </div>
                     </div>
                 ) : (
                     /* Verification Menu */
@@ -370,51 +468,44 @@ export default function HomePage() {
                         )}
 
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                            {/* Face Recognition Option */}
                             {hasFace && (
-                                <button
-                                    onClick={handleFaceVerify}
-                                    style={{
-                                        width: '100%', padding: '16px', borderRadius: 'var(--radius-md)',
-                                        background: 'linear-gradient(135deg, #10b981, #06b6d4)',
-                                        border: 'none', color: 'white',
-                                        fontSize: 15, fontWeight: 800, cursor: 'pointer',
-                                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
-                                        transition: 'all 200ms ease',
-                                    }}
-                                >
+                                <button onClick={handleFaceVerify} style={{
+                                    width: '100%', padding: '16px', borderRadius: 'var(--radius-md)',
+                                    background: 'linear-gradient(135deg, #10b981, #06b6d4)',
+                                    border: 'none', color: 'white', fontSize: 15, fontWeight: 800, cursor: 'pointer',
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
+                                }}>
                                     <Camera size={22} />
                                     التحقق بالوجه
                                 </button>
                             )}
 
-                            {/* WebAuthn / Device Auth Option */}
-                            <button
-                                onClick={handleBiometricVerify}
-                                disabled={biometricLoading}
-                                style={{
-                                    width: '100%', padding: '16px', borderRadius: 'var(--radius-md)',
-                                    background: 'linear-gradient(135deg, var(--accent-blue), #7c3aed)',
-                                    border: 'none', color: 'white',
-                                    fontSize: 15, fontWeight: 800, cursor: 'pointer',
-                                    opacity: biometricLoading ? 0.7 : 1,
-                                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
-                                    transition: 'all 200ms ease',
-                                }}
-                            >
+                            <button onClick={handleBiometricVerify} disabled={biometricLoading} style={{
+                                width: '100%', padding: '16px', borderRadius: 'var(--radius-md)',
+                                background: 'linear-gradient(135deg, var(--accent-blue), #7c3aed)',
+                                border: 'none', color: 'white', fontSize: 15, fontWeight: 800, cursor: 'pointer',
+                                opacity: biometricLoading ? 0.7 : 1,
+                                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
+                            }}>
                                 <Fingerprint size={22} />
                                 {biometricLoading ? 'جاري التحقق...' : 'بصمة / Face ID / رمز الجهاز'}
                             </button>
 
                             {!hasFace && (
-                                <div style={{
-                                    fontSize: 11, color: 'var(--text-muted)', marginTop: 4,
-                                    padding: '8px', borderRadius: 'var(--radius-sm)',
-                                    background: 'var(--bg-glass)',
-                                }}>
-                                    💡 لتفعيل التحقق بالوجه، سجّل وجهك من صفحة الملف الشخصي → إعدادات المصادقة
+                                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, padding: '8px', borderRadius: 'var(--radius-sm)', background: 'var(--bg-glass)' }}>
+                                    💡 لتفعيل التحقق بالوجه، سجّل وجهك من الملف الشخصي → إعدادات المصادقة
                                 </div>
                             )}
+                        </div>
+
+                        {/* Security Info */}
+                        <div style={{
+                            marginTop: 20, padding: '10px', borderRadius: 'var(--radius-sm)',
+                            background: 'var(--bg-glass)', fontSize: 10, color: 'var(--text-muted)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                        }}>
+                            <ShieldCheck size={14} />
+                            الجلسة تنتهي تلقائياً بعد 30 دقيقة أو عند مغادرة التطبيق
                         </div>
                     </div>
                 )}
