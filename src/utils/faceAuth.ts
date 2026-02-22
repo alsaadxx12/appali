@@ -15,6 +15,16 @@ import { doc, setDoc, getDoc } from 'firebase/firestore';
 const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights';
 const FACE_KEY = 'face_data_';
 
+// Compress photo for Firestore (small thumbnail to avoid 1MB limit)
+function compressPhotoForFirestore(video: HTMLVideoElement): string {
+    const canvas = document.createElement('canvas');
+    canvas.width = 100;
+    canvas.height = 100;
+    const ctx = canvas.getContext('2d')!;
+    ctx.drawImage(video, 0, 0, 100, 100);
+    return canvas.toDataURL('image/jpeg', 0.3);
+}
+
 let modelsLoaded = false;
 let modelsLoading = false;
 
@@ -259,15 +269,18 @@ export async function registerFace(
 
         // Store in Firestore
         try {
+            const firestorePhoto = compressPhotoForFirestore(video);
+            console.log('💾 Saving face to Firestore for user:', userId);
             await setDoc(doc(db, 'users', userId, 'biometrics', 'face'), {
                 descriptor: Array.from(avgDescriptor),
-                photo,
+                photo: firestorePhoto,
                 registeredAt: new Date().toISOString(),
                 frameCount: descriptors.length,
                 locked: true,
             });
-        } catch (e) {
-            console.error('Failed to save face to Firestore:', e);
+            console.log('✅ Face saved to Firestore successfully');
+        } catch (e: any) {
+            console.error('❌ Failed to save face to Firestore:', e?.message || e);
         }
 
         onProgress?.('تم!', 100);
@@ -561,17 +574,20 @@ export async function registerIris(
 
         // Store in Firestore
         try {
+            const firestorePhoto = compressPhotoForFirestore(video);
+            console.log('💾 Saving iris to Firestore for user:', userId);
             await setDoc(doc(db, 'users', userId, 'biometrics', 'iris'), {
                 leftEye: Array.from(avgLeft),
                 rightEye: Array.from(avgRight),
                 faceDescriptor: Array.from(avgDesc),
-                photo,
+                photo: firestorePhoto,
                 registeredAt: new Date().toISOString(),
                 frameCount: allLeftSigs.length,
                 locked: true,
             });
-        } catch (e) {
-            console.error('Failed to save iris to Firestore:', e);
+            console.log('✅ Iris saved to Firestore successfully');
+        } catch (e: any) {
+            console.error('❌ Failed to save iris to Firestore:', e?.message || e);
         }
 
         onProgress?.('تم التسجيل!', 100);
