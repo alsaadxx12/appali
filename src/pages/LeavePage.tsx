@@ -39,7 +39,40 @@ interface LeaveRequest {
     days: number;
 }
 
-// Modern icon mapper — maps leave type labels/ids to lucide-react icons
+// ── localStorage cache helpers ──
+const CACHE_KEYS = {
+    leaveTypes: 'leave_cache_types',
+    levelAllowances: 'leave_cache_allowances',
+    vipLevels: 'leave_cache_vipLevels',
+    defaultLevel: 'leave_cache_defaultLevel',
+    requests: 'leave_cache_requests',
+};
+
+function loadCache() {
+    try {
+        return {
+            leaveTypes: JSON.parse(localStorage.getItem(CACHE_KEYS.leaveTypes) || '[]') as LeaveType[],
+            levelAllowances: JSON.parse(localStorage.getItem(CACHE_KEYS.levelAllowances) || '{}') as Record<string, Record<string, number>>,
+            vipLevels: JSON.parse(localStorage.getItem(CACHE_KEYS.vipLevels) || '[]') as VipLevelData[],
+            defaultLevel: localStorage.getItem(CACHE_KEYS.defaultLevel) || 'none',
+            requests: JSON.parse(localStorage.getItem(CACHE_KEYS.requests) || '[]') as LeaveRequest[],
+        };
+    } catch {
+        return null;
+    }
+}
+
+function saveCache(data: { leaveTypes: LeaveType[]; levelAllowances: Record<string, Record<string, number>>; vipLevels: VipLevelData[]; defaultLevel: string; requests: LeaveRequest[] }) {
+    try {
+        localStorage.setItem(CACHE_KEYS.leaveTypes, JSON.stringify(data.leaveTypes));
+        localStorage.setItem(CACHE_KEYS.levelAllowances, JSON.stringify(data.levelAllowances));
+        localStorage.setItem(CACHE_KEYS.vipLevels, JSON.stringify(data.vipLevels));
+        localStorage.setItem(CACHE_KEYS.defaultLevel, data.defaultLevel);
+        localStorage.setItem(CACHE_KEYS.requests, JSON.stringify(data.requests));
+    } catch { /* quota full, ignore */ }
+}
+
+// Modern icon mapper
 const getLeaveIcon = (label: string, id: string): React.ReactNode => {
     const lower = (label + ' ' + id).toLowerCase();
     if (lower.includes('سنوي') || lower.includes('annual')) return <Palmtree size={20} />;
@@ -55,7 +88,7 @@ const getLeaveIcon = (label: string, id: string): React.ReactNode => {
     return <CalendarDays size={20} />;
 };
 
-// Circular progress ring component
+// Circular progress ring
 const ProgressRing = ({ pct, color, size = 52, strokeWidth = 3.5 }: { pct: number; color: string; size?: number; strokeWidth?: number }) => {
     const radius = (size - strokeWidth) / 2;
     const circumference = 2 * Math.PI * radius;
@@ -79,12 +112,16 @@ const ProgressRing = ({ pct, color, size = 52, strokeWidth = 3.5 }: { pct: numbe
 
 export default function LeavePage() {
     const { user } = useAuth();
-    const [leaveTypes, setLeaveTypes] = useState<LeaveType[]>([]);
-    const [levelAllowances, setLevelAllowances] = useState<Record<string, Record<string, number>>>({});
-    const [vipLevels, setVipLevels] = useState<VipLevelData[]>([]);
-    const [defaultLevel, setDefaultLevel] = useState<string>('none');
-    const [requests, setRequests] = useState<LeaveRequest[]>([]);
-    const [loading, setLoading] = useState(true);
+
+    // Initialize state from cache for instant render
+    const cached = useMemo(() => loadCache(), []);
+
+    const [leaveTypes, setLeaveTypes] = useState<LeaveType[]>(cached?.leaveTypes || []);
+    const [levelAllowances, setLevelAllowances] = useState<Record<string, Record<string, number>>>(cached?.levelAllowances || {});
+    const [vipLevels, setVipLevels] = useState<VipLevelData[]>(cached?.vipLevels || []);
+    const [defaultLevel, setDefaultLevel] = useState<string>(cached?.defaultLevel || 'none');
+    const [requests, setRequests] = useState<LeaveRequest[]>(cached?.requests || []);
+    const [loading, setLoading] = useState(!cached?.leaveTypes?.length);
 
     // Form
     const [showForm, setShowForm] = useState(false);
@@ -97,7 +134,7 @@ export default function LeavePage() {
     const [submitting, setSubmitting] = useState(false);
     const [submitted, setSubmitted] = useState(false);
 
-    // Check if selected type is time-based
+    // Time-based check
     const isTimeBased = (() => {
         const selectedType = leaveTypes.find(lt => lt.id === formType);
         return selectedType?.label?.includes('زمنية') || selectedType?.label?.includes('ساع') || false;
@@ -109,51 +146,60 @@ export default function LeavePage() {
 
     const loadData = async () => {
         try {
-            // Load VIP levels
-            const vipSnap = await getDoc(doc(db, 'settings', 'vip'));
+            // ═══ PARALLEL LOADING — all 4 queries at once ═══
+            const [vipSnap, leaveSnap, benefitsSnap, requestsSnap] = await Promise.all([
+                getDoc(doc(db, 'settings', 'vip')),
+                getDoc(doc(db, 'settings', 'leaves')),
+                getDoc(doc(db, 'settings', 'vipBenefits')),
+                user ? getDocs(query(collection(db, 'leaves'), where('employeeId', '==', user.id))) : Promise.resolve(null),
+            ]);
+
             let lvls: VipLevelData[] = [];
             let defLvl = 'none';
+            let types: LeaveType[] = [];
+            let allowances: Record<string, Record<string, number>> = {};
+            let reqs: LeaveRequest[] = [];
+
+            // VIP levels
             if (vipSnap.exists()) {
                 const data = vipSnap.data();
                 if (data.levels) { lvls = data.levels; setVipLevels(data.levels); }
                 if (data.defaultLevel) { defLvl = data.defaultLevel; setDefaultLevel(data.defaultLevel); }
             }
 
-            // Load leave settings
-            const leaveSnap = await getDoc(doc(db, 'settings', 'leaves'));
+            // Leave settings
             if (leaveSnap.exists()) {
                 const data = leaveSnap.data();
-                if (data.leaveTypes) setLeaveTypes(data.leaveTypes);
-                if (data.levelAllowances) setLevelAllowances(data.levelAllowances);
+                if (data.leaveTypes) { types = data.leaveTypes; setLeaveTypes(data.leaveTypes); }
+                if (data.levelAllowances) { allowances = data.levelAllowances; setLevelAllowances(data.levelAllowances); }
             }
 
-            // Also check vipBenefits for leave allowances (source of truth)
-            const benefitsSnap = await getDoc(doc(db, 'settings', 'vipBenefits'));
+            // VIP Benefits overrides
             if (benefitsSnap.exists()) {
                 const bData = benefitsSnap.data();
                 if (bData.benefits) {
-                    const allowances: Record<string, Record<string, number>> = {};
+                    const benefitAllowances: Record<string, Record<string, number>> = {};
                     Object.entries(bData.benefits).forEach(([levelId, b]: [string, any]) => {
-                        if (b.leaveAllowances) allowances[levelId] = b.leaveAllowances;
+                        if (b.leaveAllowances) benefitAllowances[levelId] = b.leaveAllowances;
                     });
-                    if (Object.keys(allowances).length > 0) setLevelAllowances(allowances);
+                    if (Object.keys(benefitAllowances).length > 0) {
+                        allowances = benefitAllowances;
+                        setLevelAllowances(benefitAllowances);
+                    }
                 }
             }
 
-            // Load user's leave requests
-            if (user) {
-                const q = query(
-                    collection(db, 'leaves'),
-                    where('employeeId', '==', user.id),
-                );
-                const snap = await getDocs(q);
-                const reqs: LeaveRequest[] = [];
-                snap.forEach(d => {
+            // User leave requests
+            if (requestsSnap) {
+                requestsSnap.forEach(d => {
                     reqs.push({ id: d.id, ...d.data() } as LeaveRequest);
                 });
                 reqs.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
                 setRequests(reqs);
             }
+
+            // Save to cache for instant load next time
+            saveCache({ leaveTypes: types, levelAllowances: allowances, vipLevels: lvls, defaultLevel: defLvl, requests: reqs });
         } catch (e) {
             console.error('Error loading leave data:', e);
         } finally {
@@ -176,7 +222,6 @@ export default function LeavePage() {
     const userLevel = getUserLevel();
     const userAllowances = levelAllowances[userLevel] || {};
 
-    // Compute used days per type (approved + pending)
     const getUsedDays = (typeId: string): number => {
         return requests
             .filter(r => r.type === typeId && (r.status === 'approved' || r.status === 'pending'))
@@ -246,30 +291,70 @@ export default function LeavePage() {
 
     const currentLevelData = vipLevels.find(l => l.id === userLevel);
 
-    if (loading) {
+    // ═══ SKELETON SHIMMER — shown only if no cache AND still loading ═══
+    if (loading && leaveTypes.length === 0) {
         return (
-            <div className="page-content page-enter" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', minHeight: 300 }}>
-                <div style={{ textAlign: 'center', color: 'var(--text-muted)' }}>
-                    <div className="leave-loading-icon">
-                        <CalendarDays size={28} style={{ opacity: 0.5 }} />
+            <div className="page-content page-enter" style={{ paddingBottom: 100 }}>
+                {/* Skeleton header */}
+                <div style={{
+                    borderRadius: 20, padding: '22px 20px', marginBottom: 18,
+                    background: 'rgba(255,255,255,0.02)', border: '1px solid rgba(255,255,255,0.05)',
+                    overflow: 'hidden', position: 'relative',
+                }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18 }}>
+                        <div className="skeleton-pulse" style={{ width: 42, height: 42, borderRadius: 14 }} />
+                        <div>
+                            <div className="skeleton-pulse" style={{ width: 100, height: 16, borderRadius: 8, marginBottom: 6 }} />
+                            <div className="skeleton-pulse" style={{ width: 140, height: 10, borderRadius: 6 }} />
+                        </div>
                     </div>
-                    <div style={{ fontSize: 13, marginTop: 12 }}>جاري التحميل...</div>
+                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 10 }}>
+                        {[0, 1, 2].map(i => (
+                            <div key={i} style={{ textAlign: 'center', padding: '14px 6px 12px', borderRadius: 16, background: 'rgba(255,255,255,0.02)' }}>
+                                <div className="skeleton-pulse" style={{ width: 40, height: 40, borderRadius: 12, margin: '0 auto 8px' }} />
+                                <div className="skeleton-pulse" style={{ width: 50, height: 8, borderRadius: 4, margin: '0 auto 6px' }} />
+                                <div className="skeleton-pulse" style={{ width: 30, height: 20, borderRadius: 6, margin: '0 auto' }} />
+                            </div>
+                        ))}
+                    </div>
                 </div>
+                {/* Skeleton button */}
+                <div className="skeleton-pulse" style={{ width: '100%', height: 52, borderRadius: 16, marginBottom: 20 }} />
+                {/* Skeleton history */}
+                <div className="skeleton-pulse" style={{ width: 120, height: 14, borderRadius: 6, marginBottom: 14 }} />
+                {[0, 1].map(i => (
+                    <div key={i} className="skeleton-pulse" style={{
+                        width: '100%', height: 100, borderRadius: 16, marginBottom: 10,
+                    }} />
+                ))}
+                <style>{`
+                    .skeleton-pulse {
+                        background: linear-gradient(90deg, rgba(255,255,255,0.03) 25%, rgba(255,255,255,0.06) 50%, rgba(255,255,255,0.03) 75%);
+                        background-size: 200% 100%;
+                        animation: skeletonShimmer 1.5s infinite;
+                    }
+                    @keyframes skeletonShimmer {
+                        0% { background-position: 200% 0; }
+                        100% { background-position: -200% 0; }
+                    }
+                `}</style>
             </div>
         );
     }
 
     return (
-        <div className="page-content page-enter">
+        <div className="page-content page-enter" style={{ paddingBottom: 100 }}>
             {/* === Header Card === */}
-            <div className="leave-header-card glass-card" style={{
+            <div style={{
                 padding: '22px 20px', marginBottom: 18,
+                borderRadius: 20,
                 background: 'linear-gradient(135deg, rgba(59,130,246,0.12), rgba(139,92,246,0.08), rgba(59,130,246,0.05))',
                 border: '1px solid rgba(99,102,241,0.15)',
                 position: 'relative',
                 overflow: 'hidden',
+                backdropFilter: 'blur(10px)',
             }}>
-                {/* Decorative glow */}
+                {/* Decorative glows */}
                 <div style={{
                     position: 'absolute', top: -30, left: -30,
                     width: 100, height: 100, borderRadius: '50%',
@@ -287,12 +372,12 @@ export default function LeavePage() {
                     <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                         <div style={{
                             width: 42, height: 42, borderRadius: 14,
-                            background: 'linear-gradient(135deg, rgba(99,102,241,0.25), rgba(139,92,246,0.2))',
-                            border: '1px solid rgba(139,92,246,0.2)',
+                            background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
                             display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            color: '#a78bfa',
+                            color: 'white',
+                            boxShadow: '0 4px 16px rgba(99,102,241,0.3)',
                         }}>
-                            <CalendarCheck size={22} />
+                            <CalendarCheck size={22} strokeWidth={2.2} />
                         </div>
                         <div>
                             <h2 style={{ fontSize: 19, fontWeight: 900, margin: 0, letterSpacing: '-0.3px' }}>الإجازات</h2>
@@ -300,7 +385,7 @@ export default function LeavePage() {
                         </div>
                     </div>
                     {currentLevelData && (
-                        <div className="leave-vip-badge" style={{
+                        <div style={{
                             padding: '5px 14px', borderRadius: 20,
                             background: `${currentLevelData.color}15`,
                             border: `1px solid ${currentLevelData.color}25`,
@@ -329,14 +414,12 @@ export default function LeavePage() {
                             return (
                                 <div
                                     key={lt.id}
-                                    className="leave-balance-card"
                                     style={{
                                         textAlign: 'center', padding: '14px 6px 12px',
                                         borderRadius: 16,
                                         background: 'rgba(255,255,255,0.03)',
                                         border: `1px solid ${lt.color}18`,
                                         position: 'relative',
-                                        animationDelay: `${idx * 80}ms`,
                                         transition: 'all 0.3s cubic-bezier(0.4,0,0.2,1)',
                                     }}
                                 >
@@ -398,10 +481,12 @@ export default function LeavePage() {
 
             {/* === Request Leave Button / Form === */}
             {showForm ? (
-                <div className="glass-card leave-form-card" style={{
+                <div style={{
                     padding: '20px', marginBottom: 18,
+                    borderRadius: 20,
                     border: '1px solid rgba(99,102,241,0.2)',
                     background: 'rgba(255,255,255,0.03)',
+                    backdropFilter: 'blur(8px)',
                 }}>
                     <div style={{
                         display: 'flex', alignItems: 'center', gap: 10,
@@ -409,9 +494,10 @@ export default function LeavePage() {
                     }}>
                         <div style={{
                             width: 34, height: 34, borderRadius: 10,
-                            background: 'linear-gradient(135deg, rgba(99,102,241,0.2), rgba(139,92,246,0.15))',
+                            background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
                             display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            color: '#a78bfa',
+                            color: 'white',
+                            boxShadow: '0 3px 12px rgba(99,102,241,0.3)',
                         }}>
                             <FileText size={17} />
                         </div>
@@ -435,7 +521,6 @@ export default function LeavePage() {
                                 const isSelected = formType === lt.id;
                                 return (
                                     <button key={lt.id} onClick={() => setFormType(lt.id)}
-                                        className={`leave-type-chip ${isSelected ? 'active' : ''}`}
                                         style={{
                                             padding: '9px 14px', borderRadius: 12,
                                             background: isSelected ? `${lt.color}18` : 'rgba(255,255,255,0.04)',
@@ -445,6 +530,8 @@ export default function LeavePage() {
                                             display: 'flex', alignItems: 'center', gap: 7,
                                             opacity: remaining <= 0 ? 0.35 : 1,
                                             transition: 'all 0.25s ease',
+                                            cursor: remaining <= 0 ? 'not-allowed' : 'pointer',
+                                            fontFamily: 'inherit',
                                         }}
                                         disabled={remaining <= 0}
                                     >
@@ -480,7 +567,6 @@ export default function LeavePage() {
                             </div>
                             <input type="date" value={formStartDate}
                                 onChange={e => setFormStartDate(e.target.value)}
-                                className="leave-date-input"
                                 style={{
                                     width: '100%', padding: '11px 10px', borderRadius: 12,
                                     background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
@@ -499,7 +585,6 @@ export default function LeavePage() {
                             <input type="date" value={formEndDate}
                                 onChange={e => setFormEndDate(e.target.value)}
                                 min={formStartDate}
-                                className="leave-date-input"
                                 style={{
                                     width: '100%', padding: '11px 10px', borderRadius: 12,
                                     background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
@@ -522,7 +607,6 @@ export default function LeavePage() {
                                 </div>
                                 <input type="time" value={formStartTime}
                                     onChange={e => setFormStartTime(e.target.value)}
-                                    className="leave-date-input"
                                     style={{
                                         width: '100%', padding: '11px 10px', borderRadius: 12,
                                         background: 'rgba(139,92,246,0.06)', border: '1px solid rgba(139,92,246,0.18)',
@@ -540,7 +624,6 @@ export default function LeavePage() {
                                 </div>
                                 <input type="time" value={formEndTime}
                                     onChange={e => setFormEndTime(e.target.value)}
-                                    className="leave-date-input"
                                     style={{
                                         width: '100%', padding: '11px 10px', borderRadius: 12,
                                         background: 'rgba(139,92,246,0.06)', border: '1px solid rgba(139,92,246,0.18)',
@@ -591,7 +674,7 @@ export default function LeavePage() {
                                 background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.1)',
                                 color: 'var(--text-primary)', fontSize: 12, resize: 'vertical',
                                 outline: 'none', transition: 'all 0.25s ease',
-                                lineHeight: 1.6,
+                                lineHeight: 1.6, fontFamily: 'inherit',
                             }}
                         />
                     </div>
@@ -605,14 +688,13 @@ export default function LeavePage() {
                                 fontSize: 12, fontWeight: 600,
                                 display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
                                 border: '1px solid rgba(255,255,255,0.08)',
-                                transition: 'all 0.25s ease',
+                                transition: 'all 0.25s ease', cursor: 'pointer', fontFamily: 'inherit',
                             }}>
                             <X size={15} /> إلغاء
                         </button>
                         <button
                             onClick={handleSubmit}
                             disabled={submitting || !formType || !formStartDate || !formEndDate || !formReason.trim() || (isTimeBased && (!formStartTime || !formEndTime))}
-                            className="leave-submit-btn"
                             style={{
                                 flex: 2, padding: '13px', borderRadius: 14,
                                 background: submitted
@@ -625,6 +707,7 @@ export default function LeavePage() {
                                 transition: 'all 0.3s ease',
                                 border: submitted ? '1px solid rgba(34,197,94,0.2)' : 'none',
                                 boxShadow: submitted ? 'none' : '0 4px 16px rgba(99,102,241,0.3)',
+                                cursor: 'pointer', fontFamily: 'inherit',
                             }}>
                             {submitted ? (
                                 <><Check size={17} strokeWidth={2.5} /> تم إرسال الطلب</>
@@ -638,7 +721,6 @@ export default function LeavePage() {
                 </div>
             ) : (
                 <button onClick={() => setShowForm(true)}
-                    className="leave-new-request-btn"
                     style={{
                         width: '100%', padding: '15px', borderRadius: 16,
                         background: 'linear-gradient(135deg, rgba(99,102,241,0.12), rgba(139,92,246,0.1))',
@@ -646,12 +728,14 @@ export default function LeavePage() {
                         color: '#818cf8', fontSize: 14, fontWeight: 800,
                         display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
                         marginBottom: 20,
-                        transition: 'all 0.3s ease',
+                        transition: 'all 0.3s ease', cursor: 'pointer', fontFamily: 'inherit',
                     }}>
                     <div style={{
                         width: 30, height: 30, borderRadius: 10,
-                        background: 'linear-gradient(135deg, rgba(99,102,241,0.2), rgba(139,92,246,0.15))',
+                        background: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        color: 'white',
+                        boxShadow: '0 3px 10px rgba(99,102,241,0.3)',
                     }}>
                         <Plus size={18} strokeWidth={2.5} />
                     </div>
@@ -666,9 +750,10 @@ export default function LeavePage() {
             }}>
                 <div style={{
                     width: 30, height: 30, borderRadius: 10,
-                    background: 'rgba(59,130,246,0.12)',
+                    background: 'linear-gradient(135deg, #3b82f6, #60a5fa)',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    color: '#60a5fa',
+                    color: 'white',
+                    boxShadow: '0 3px 10px rgba(59,130,246,0.25)',
                 }}>
                     <CalendarDays size={16} />
                 </div>
@@ -686,9 +771,11 @@ export default function LeavePage() {
             </div>
 
             {requests.length === 0 ? (
-                <div className="glass-card" style={{
+                <div style={{
                     textAlign: 'center', padding: '36px 20px',
+                    borderRadius: 20,
                     background: 'rgba(255,255,255,0.02)',
+                    border: '1px solid rgba(255,255,255,0.05)',
                 }}>
                     <div style={{
                         width: 56, height: 56, borderRadius: 18, margin: '0 auto 14px',
@@ -713,13 +800,15 @@ export default function LeavePage() {
                         const accentColor = lt?.color || '#6366f1';
                         return (
                             <div key={req.id}
-                                className="leave-history-card glass-card"
                                 style={{
                                     padding: '16px 18px',
+                                    borderRadius: 18,
                                     borderRight: `3px solid ${accentColor}`,
                                     position: 'relative',
                                     overflow: 'hidden',
-                                    animationDelay: `${idx * 60}ms`,
+                                    background: 'var(--bg-glass, rgba(255,255,255,0.03))',
+                                    border: '1px solid var(--border-glass)',
+                                    backdropFilter: 'blur(8px)',
                                 }}
                             >
                                 {/* Subtle accent glow */}
@@ -737,7 +826,7 @@ export default function LeavePage() {
                                     <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
                                         <div style={{
                                             width: 38, height: 38, borderRadius: 12,
-                                            background: `linear-gradient(135deg, ${accentColor}20, ${accentColor}10)`,
+                                            background: `linear-gradient(135deg, ${accentColor}25, ${accentColor}12)`,
                                             display: 'flex', alignItems: 'center', justifyContent: 'center',
                                             color: accentColor,
                                             flexShrink: 0,
@@ -754,14 +843,13 @@ export default function LeavePage() {
                                             </div>
                                         </div>
                                     </div>
-                                    <div className={`leave-status-badge ${req.status === 'pending' ? 'pending' : ''}`}
-                                        style={{
-                                            padding: '4px 12px', borderRadius: 10,
-                                            background: sc.bg, color: sc.color,
-                                            fontSize: 10, fontWeight: 700,
-                                            display: 'flex', alignItems: 'center', gap: 4,
-                                            border: `1px solid ${sc.color}20`,
-                                        }}>
+                                    <div style={{
+                                        padding: '4px 12px', borderRadius: 10,
+                                        background: sc.bg, color: sc.color,
+                                        fontSize: 10, fontWeight: 700,
+                                        display: 'flex', alignItems: 'center', gap: 4,
+                                        border: `1px solid ${sc.color}20`,
+                                    }}>
                                         {sc.icon} {sc.label}
                                     </div>
                                 </div>
@@ -804,6 +892,8 @@ export default function LeavePage() {
                     })}
                 </div>
             )}
+
+            <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
         </div>
     );
 }
