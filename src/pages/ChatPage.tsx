@@ -1,15 +1,15 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
     ArrowRight, Send, Search, Users, MessageCircle, Loader2,
     Smile, Paperclip, Image as ImageIcon, X, Trash2, Edit3, Check,
-    Clock, Download, FileText, Camera, Eye, EyeOff, MoreVertical,
+    Clock, Download, FileText, Camera, EyeOff, MoreVertical,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { db, storage } from '../firebase';
 import {
     collection, doc, getDocs, addDoc, query, where, orderBy,
-    onSnapshot, serverTimestamp, Timestamp, setDoc, getDoc,
-    updateDoc, deleteField,
+    onSnapshot, serverTimestamp, Timestamp, setDoc,
+    updateDoc,
 } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 
@@ -35,8 +35,7 @@ interface Message {
     fileUrl?: string;
     fileName?: string;
     fileSize?: string;
-    disappearAfter?: number; // seconds
-    viewedAt?: Timestamp;
+    disappearAfter?: number;
 }
 
 interface Conversation {
@@ -45,14 +44,13 @@ interface Conversation {
     participantNames: Record<string, string>;
     lastMessage?: string;
     lastMessageAt?: Timestamp;
-    unreadCount?: number;
 }
 
 interface Props {
     onBack: () => void;
 }
 
-// ====== EMOJI DATA ======
+// ====== EMOJI ======
 const EMOJI_CATEGORIES = [
     { id: 'smileys', icon: '😀', emojis: ['😀', '😂', '🤣', '😊', '😍', '🥰', '😘', '😜', '🤗', '😎', '🥳', '🤩', '😏', '😢', '😭', '😡', '🤯', '😴', '🤔', '🙄', '😱', '🤫', '🤐', '😷', '🤒', '💀', '👻', '👽', '🤖', '💩'] },
     { id: 'hands', icon: '👋', emojis: ['👍', '👎', '👌', '✌️', '🤞', '🤟', '🤘', '🤙', '👋', '👏', '🙌', '🤝', '🙏', '💪', '👊', '✊', '🫶', '❤️‍🔥', '💯', '🔥'] },
@@ -62,7 +60,6 @@ const EMOJI_CATEGORIES = [
     { id: 'nature', icon: '🌙', emojis: ['☀️', '🌙', '⭐', '🌟', '✨', '⚡', '🔥', '💧', '🌊', '🌈', '❄️', '🌸', '🌺', '🌻', '🍀', '🌲', '🌴', '🐦', '🦋', '🐾'] },
 ];
 
-// ====== DISAPPEAR OPTIONS ======
 const DISAPPEAR_OPTIONS = [
     { label: 'إيقاف', value: 0 },
     { label: '10 ث', value: 10 },
@@ -75,21 +72,22 @@ export default function ChatPage({ onBack }: Props) {
     const { user } = useAuth();
     const userId = user?.id || '';
 
-    const [view, setView] = useState<'list' | 'chat' | 'newChat'>('list');
+    // Main state
+    const [activeChat, setActiveChat] = useState<{ convId: string; otherUser: ChatUser } | null>(null);
     const [conversations, setConversations] = useState<Conversation[]>([]);
     const [allUsers, setAllUsers] = useState<ChatUser[]>([]);
-    const [selectedConv, setSelectedConv] = useState<Conversation | null>(null);
     const [messages, setMessages] = useState<Message[]>([]);
     const [newMessage, setNewMessage] = useState('');
     const [search, setSearch] = useState('');
     const [loading, setLoading] = useState(true);
     const [sending, setSending] = useState(false);
+    const [usersLoaded, setUsersLoaded] = useState(false);
     const messagesEndRef = useRef<HTMLDivElement>(null);
     const inputRef = useRef<HTMLInputElement>(null);
     const fileInputRef = useRef<HTMLInputElement>(null);
     const imageInputRef = useRef<HTMLInputElement>(null);
 
-    // New features state
+    // Feature state
     const [showEmoji, setShowEmoji] = useState(false);
     const [emojiCategory, setEmojiCategory] = useState('smileys');
     const [showAttach, setShowAttach] = useState(false);
@@ -104,7 +102,33 @@ export default function ChatPage({ onBack }: Props) {
     const [imagePreview, setImagePreview] = useState<string | null>(null);
     const [uploading, setUploading] = useState(false);
 
-    // Load conversations
+    // ====== LOAD USERS (on mount) ======
+    useEffect(() => {
+        if (!userId) return;
+        const loadUsers = async () => {
+            try {
+                const snap = await getDocs(collection(db, 'users'));
+                const users: ChatUser[] = snap.docs
+                    .filter(d => d.id !== userId)
+                    .map(d => ({
+                        id: d.id,
+                        name: d.data().name || 'مستخدم',
+                        avatar: d.data().avatar,
+                        department: d.data().department,
+                        online: d.data().online === true,
+                        lastSeen: d.data().lastSeen,
+                    }));
+                setAllUsers(users);
+                setUsersLoaded(true);
+            } catch (e) {
+                console.error('Error loading users:', e);
+                setUsersLoaded(true);
+            }
+        };
+        loadUsers();
+    }, [userId]);
+
+    // ====== LOAD CONVERSATIONS ======
     useEffect(() => {
         if (!userId) return;
         const q = query(
@@ -126,31 +150,11 @@ export default function ChatPage({ onBack }: Props) {
         return () => unsub();
     }, [userId]);
 
-    // Load all users for new chat
-    const loadUsers = async () => {
-        try {
-            const snap = await getDocs(collection(db, 'users'));
-            const users: ChatUser[] = snap.docs
-                .filter(d => d.id !== userId)
-                .map(d => ({
-                    id: d.id,
-                    name: d.data().name || 'مستخدم',
-                    avatar: d.data().avatar,
-                    department: d.data().department,
-                    online: d.data().online === true,
-                    lastSeen: d.data().lastSeen,
-                }));
-            setAllUsers(users);
-        } catch (e) {
-            console.error('Error loading users:', e);
-        }
-    };
-
-    // Load messages for selected conversation
+    // ====== LOAD MESSAGES ======
     useEffect(() => {
-        if (!selectedConv) return;
+        if (!activeChat) { setMessages([]); return; }
         const q = query(
-            collection(db, 'conversations', selectedConv.id, 'messages'),
+            collection(db, 'conversations', activeChat.convId, 'messages'),
             orderBy('createdAt', 'asc')
         );
         const unsub = onSnapshot(q, (snap) => {
@@ -162,14 +166,12 @@ export default function ChatPage({ onBack }: Props) {
             setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' }), 100);
         });
         return () => unsub();
-    }, [selectedConv?.id]);
+    }, [activeChat?.convId]);
 
-    // Track other user's online status
+    // ====== TRACK OTHER USER ONLINE ======
     useEffect(() => {
-        if (!selectedConv) return;
-        const otherId = selectedConv.participants.find(p => p !== userId);
-        if (!otherId) return;
-        const unsub = onSnapshot(doc(db, 'users', otherId), (snap) => {
+        if (!activeChat) return;
+        const unsub = onSnapshot(doc(db, 'users', activeChat.otherUser.id), (snap) => {
             if (snap.exists()) {
                 const data = snap.data();
                 setOtherUserOnline(data.online === true);
@@ -177,15 +179,14 @@ export default function ChatPage({ onBack }: Props) {
             }
         });
         return () => unsub();
-    }, [selectedConv?.id, userId]);
+    }, [activeChat?.otherUser.id]);
 
-    // Handle disappearing messages (client-side)
+    // ====== DISAPPEARING MESSAGES ======
     useEffect(() => {
         const interval = setInterval(() => {
             setMessages(prev => prev.map(msg => {
                 if (msg.disappearAfter && msg.disappearAfter > 0 && msg.createdAt) {
-                    const created = msg.createdAt.toDate().getTime();
-                    const elapsed = (Date.now() - created) / 1000;
+                    const elapsed = (Date.now() - msg.createdAt.toDate().getTime()) / 1000;
                     if (elapsed > msg.disappearAfter) {
                         return { ...msg, deleted: true, text: '💨 رسالة ذاتية الاختفاء' };
                     }
@@ -196,8 +197,55 @@ export default function ChatPage({ onBack }: Props) {
         return () => clearInterval(interval);
     }, []);
 
+    // Close context menu
+    useEffect(() => {
+        const handler = () => setContextMsg(null);
+        if (contextMsg) window.addEventListener('click', handler);
+        return () => window.removeEventListener('click', handler);
+    }, [contextMsg]);
+
+    // ====== OPEN CHAT WITH USER ======
+    const openChatWith = async (targetUser: ChatUser) => {
+        // Check if conversation already exists
+        const existing = conversations.find(c =>
+            c.participants.includes(targetUser.id) && c.participants.includes(userId)
+        );
+        if (existing) {
+            setActiveChat({ convId: existing.id, otherUser: targetUser });
+            return;
+        }
+        // Create new conversation
+        if (!user) return;
+        try {
+            const convRef = await addDoc(collection(db, 'conversations'), {
+                participants: [userId, targetUser.id],
+                participantNames: {
+                    [userId]: user.name,
+                    [targetUser.id]: targetUser.name,
+                },
+                lastMessage: '',
+                lastMessageAt: serverTimestamp(),
+                createdAt: serverTimestamp(),
+            });
+            setActiveChat({ convId: convRef.id, otherUser: targetUser });
+        } catch (e) {
+            console.error('Error creating conversation:', e);
+        }
+    };
+
+    const openExistingConv = (conv: Conversation) => {
+        const otherId = conv.participants.find(p => p !== userId) || '';
+        const otherName = conv.participantNames?.[otherId] || 'مستخدم';
+        const matchedUser = allUsers.find(u => u.id === otherId);
+        setActiveChat({
+            convId: conv.id,
+            otherUser: matchedUser || { id: otherId, name: otherName },
+        });
+    };
+
+    // ====== SEND MESSAGE ======
     const sendMessage = async (opts?: { type?: string; fileUrl?: string; fileName?: string; fileSize?: string }) => {
-        if ((!newMessage.trim() && !opts?.fileUrl) || !selectedConv || !user) return;
+        if ((!newMessage.trim() && !opts?.fileUrl) || !activeChat || !user) return;
         setSending(true);
         const text = newMessage.trim();
         setNewMessage('');
@@ -216,8 +264,8 @@ export default function ChatPage({ onBack }: Props) {
             if (opts?.fileSize) msgData.fileSize = opts.fileSize;
             if (disappearMode > 0) msgData.disappearAfter = disappearMode;
 
-            await addDoc(collection(db, 'conversations', selectedConv.id, 'messages'), msgData);
-            await setDoc(doc(db, 'conversations', selectedConv.id), {
+            await addDoc(collection(db, 'conversations', activeChat.convId, 'messages'), msgData);
+            await setDoc(doc(db, 'conversations', activeChat.convId), {
                 lastMessage: msgData.text,
                 lastMessageAt: serverTimestamp(),
             }, { merge: true });
@@ -229,13 +277,13 @@ export default function ChatPage({ onBack }: Props) {
     };
 
     const handleEditMessage = async () => {
-        if (!editingMsg || !editText.trim() || !selectedConv) return;
+        if (!editingMsg || !editText.trim() || !activeChat) return;
         try {
-            await updateDoc(doc(db, 'conversations', selectedConv.id, 'messages', editingMsg.id), {
+            await updateDoc(doc(db, 'conversations', activeChat.convId, 'messages', editingMsg.id), {
                 text: editText.trim(),
                 edited: true,
             });
-            await setDoc(doc(db, 'conversations', selectedConv.id), {
+            await setDoc(doc(db, 'conversations', activeChat.convId), {
                 lastMessage: editText.trim(),
             }, { merge: true });
         } catch (e) {
@@ -246,9 +294,9 @@ export default function ChatPage({ onBack }: Props) {
     };
 
     const handleDeleteMessage = async (msg: Message) => {
-        if (!selectedConv) return;
+        if (!activeChat) return;
         try {
-            await updateDoc(doc(db, 'conversations', selectedConv.id, 'messages', msg.id), {
+            await updateDoc(doc(db, 'conversations', activeChat.convId, 'messages', msg.id), {
                 deleted: true,
                 text: 'تم حذف هذه الرسالة',
             });
@@ -259,11 +307,11 @@ export default function ChatPage({ onBack }: Props) {
     };
 
     const handleFileUpload = async (file: File, type: 'image' | 'file') => {
-        if (!selectedConv || !user) return;
+        if (!activeChat || !user) return;
         setUploading(true);
         setShowAttach(false);
         try {
-            const path = `chat/${selectedConv.id}/${Date.now()}_${file.name}`;
+            const path = `chat/${activeChat.convId}/${Date.now()}_${file.name}`;
             const storageRef = ref(storage, path);
             await uploadBytes(storageRef, file);
             const url = await getDownloadURL(storageRef);
@@ -275,54 +323,13 @@ export default function ChatPage({ onBack }: Props) {
         setUploading(false);
     };
 
-    const startNewConversation = async (targetUser: ChatUser) => {
-        if (!user) return;
-        const existing = conversations.find(c =>
-            c.participants.includes(targetUser.id) && c.participants.includes(userId)
-        );
-        if (existing) {
-            setSelectedConv(existing);
-            setView('chat');
-            return;
-        }
-        try {
-            const convRef = await addDoc(collection(db, 'conversations'), {
-                participants: [userId, targetUser.id],
-                participantNames: {
-                    [userId]: user.name,
-                    [targetUser.id]: targetUser.name,
-                },
-                lastMessage: '',
-                lastMessageAt: serverTimestamp(),
-                createdAt: serverTimestamp(),
-            });
-            const newConv: Conversation = {
-                id: convRef.id,
-                participants: [userId, targetUser.id],
-                participantNames: {
-                    [userId]: user.name,
-                    [targetUser.id]: targetUser.name,
-                },
-            };
-            setSelectedConv(newConv);
-            setView('chat');
-        } catch (e) {
-            console.error('Error creating conversation:', e);
-        }
-    };
-
-    const getOtherName = (conv: Conversation) => {
-        const otherId = conv.participants.find(p => p !== userId);
-        return conv.participantNames?.[otherId || ''] || 'مستخدم';
-    };
-
+    // ====== HELPERS ======
     const getInitials = (name: string) => name.split(' ').map(w => w[0]).join('').slice(0, 2);
 
     const formatTime = (ts: Timestamp | null | undefined) => {
         if (!ts) return '';
         const d = ts.toDate();
-        const now = new Date();
-        const diff = now.getTime() - d.getTime();
+        const diff = Date.now() - d.getTime();
         if (diff < 60000) return 'الآن';
         if (diff < 3600000) return `${Math.floor(diff / 60000)} د`;
         if (diff < 86400000) return d.toLocaleTimeString('ar-IQ', { hour: '2-digit', minute: '2-digit' });
@@ -331,181 +338,74 @@ export default function ChatPage({ onBack }: Props) {
 
     const formatLastSeen = (ts: Timestamp | null) => {
         if (!ts) return 'غير متصل';
-        const d = ts.toDate();
-        const diff = Date.now() - d.getTime();
+        const diff = Date.now() - ts.toDate().getTime();
         if (diff < 60000) return 'آخر ظهور: الآن';
         if (diff < 3600000) return `آخر ظهور: منذ ${Math.floor(diff / 60000)} د`;
-        return `آخر ظهور: ${d.toLocaleTimeString('ar-IQ', { hour: '2-digit', minute: '2-digit' })}`;
+        return `آخر ظهور: ${ts.toDate().toLocaleTimeString('ar-IQ', { hour: '2-digit', minute: '2-digit' })}`;
     };
 
-    const filteredUsers = allUsers.filter(u =>
-        u.name.toLowerCase().includes(search.toLowerCase()) ||
-        (u.department || '').toLowerCase().includes(search.toLowerCase())
-    );
+    const getConvOtherName = (conv: Conversation) => {
+        const otherId = conv.participants.find(p => p !== userId) || '';
+        return conv.participantNames?.[otherId] || 'مستخدم';
+    };
 
-    const handleContextMenu = (e: React.MouseEvent | React.TouchEvent, msg: Message) => {
+    const handleContextMenu = (e: React.MouseEvent, msg: Message) => {
         e.preventDefault();
         const rect = (e.target as HTMLElement).getBoundingClientRect();
         setContextPos({ x: rect.left, y: rect.top - 10 });
         setContextMsg(msg);
     };
 
-    // Close context when clicking anywhere
-    useEffect(() => {
-        const handler = () => setContextMsg(null);
-        if (contextMsg) window.addEventListener('click', handler);
-        return () => window.removeEventListener('click', handler);
-    }, [contextMsg]);
-
-    // === STYLES ===
-    const styles = `
+    // ====== STYLES ======
+    const css = `
         @keyframes spin { to { transform: rotate(360deg); } }
-        @keyframes fadeUp { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: translateY(0); } }
-        @keyframes slideUp { from { opacity: 0; transform: translateY(100%); } to { opacity: 1; transform: translateY(0); } }
-        @keyframes pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.4; } }
-        @keyframes msgIn { from { opacity: 0; transform: scale(0.9) translateY(10px); } to { opacity: 1; transform: scale(1) translateY(0); } }
-        .emoji-grid { display: grid; grid-template-columns: repeat(8, 1fr); gap: 2px; }
-        .emoji-btn { font-size: 22px; padding: 6px; border-radius: 8px; background: none; border: none; cursor: pointer; transition: all 0.15s; text-align: center; }
-        .emoji-btn:hover, .emoji-btn:active { background: var(--bg-glass-strong); transform: scale(1.2); }
-        .chat-ctx-menu { position: fixed; z-index: 1000; background: var(--bg-card); border: 1px solid var(--border-glass); border-radius: var(--radius-lg); box-shadow: 0 8px 32px rgba(0,0,0,0.25); padding: 6px; min-width: 160px; animation: fadeUp 0.15s ease; }
-        .chat-ctx-item { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: var(--radius-md); font-size: 12px; font-weight: 600; cursor: pointer; border: none; background: none; width: 100%; text-align: right; color: var(--text-primary); font-family: var(--font-arabic); transition: all 0.15s; }
-        .chat-ctx-item:hover { background: var(--bg-glass); }
-        .chat-ctx-item.danger { color: var(--accent-rose); }
-        .disappear-badge { display: inline-flex; align-items: center; gap: 3px; padding: 2px 6px; border-radius: var(--radius-full); background: rgba(245,158,11,0.15); color: var(--accent-amber); font-size: 9px; font-weight: 700; }
+        @keyframes fadeUp { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+        @keyframes slideUp { from { opacity:0; transform:translateY(100%); } to { opacity:1; transform:translateY(0); } }
+        @keyframes msgIn { from { opacity:0; transform:scale(0.92) translateY(8px); } to { opacity:1; transform:scale(1) translateY(0); } }
+        .emoji-grid { display:grid; grid-template-columns:repeat(8,1fr); gap:2px; }
+        .emoji-btn { font-size:22px; padding:6px; border-radius:8px; background:none; border:none; cursor:pointer; transition:all 0.15s; text-align:center; }
+        .emoji-btn:hover,.emoji-btn:active { background:var(--bg-glass-strong); transform:scale(1.2); }
+        .ctx-menu { position:fixed; z-index:1000; background:var(--bg-card); border:1px solid var(--border-glass); border-radius:var(--radius-lg); box-shadow:0 8px 32px rgba(0,0,0,0.3); padding:6px; min-width:160px; animation:fadeUp 0.15s ease; }
+        .ctx-item { display:flex; align-items:center; gap:8px; padding:10px 14px; border-radius:var(--radius-md); font-size:12px; font-weight:600; cursor:pointer; border:none; background:none; width:100%; text-align:right; color:var(--text-primary); font-family:var(--font-arabic); transition:all 0.15s; }
+        .ctx-item:hover { background:var(--bg-glass); }
+        .ctx-item.del { color:var(--accent-rose); }
     `;
 
-    // === NEW CHAT: Select user ===
-    if (view === 'newChat') {
-        return (
-            <div className="page-content page-enter">
-                <style>{styles}</style>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
-                    <button onClick={() => setView('list')} style={{
-                        width: 36, height: 36, borderRadius: 'var(--radius-md)',
-                        background: 'var(--bg-glass)', border: '1px solid var(--border-glass)',
-                        color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        cursor: 'pointer',
-                    }}>
-                        <ArrowRight size={18} />
-                    </button>
-                    <div style={{ flex: 1 }}>
-                        <h2 style={{ fontSize: 18, fontWeight: 800 }}>محادثة جديدة</h2>
-                        <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>اختر موظف للمراسلة</p>
-                    </div>
-                </div>
-
-                {/* Search */}
-                <div style={{ position: 'relative', marginBottom: 16 }}>
-                    <Search size={16} style={{
-                        position: 'absolute', right: 12, top: '50%',
-                        transform: 'translateY(-50%)', color: 'var(--text-muted)',
-                    }} />
-                    <input
-                        type="text"
-                        placeholder="بحث عن موظف..."
-                        value={search}
-                        onChange={e => setSearch(e.target.value)}
-                        style={{
-                            width: '100%', padding: '12px 40px 12px 14px',
-                            borderRadius: 'var(--radius-lg)',
-                            background: 'var(--bg-glass)',
-                            border: '1px solid var(--border-glass)',
-                            color: 'var(--text-primary)', fontSize: 13,
-                            fontFamily: 'var(--font-arabic)', outline: 'none',
-                        }}
-                    />
-                </div>
-
-                {/* Users list */}
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-                    {filteredUsers.map(u => (
-                        <button
-                            key={u.id}
-                            onClick={() => startNewConversation(u)}
-                            style={{
-                                display: 'flex', alignItems: 'center', gap: 12,
-                                padding: '12px 14px',
-                                borderRadius: 'var(--radius-lg)',
-                                background: 'var(--bg-card)',
-                                border: '1px solid var(--border-glass)',
-                                cursor: 'pointer', textAlign: 'right',
-                                transition: 'all 0.2s',
-                                width: '100%',
-                                fontFamily: 'var(--font-arabic)',
-                                boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
-                            }}
-                        >
-                            {/* Avatar with online dot */}
-                            <div style={{ position: 'relative', flexShrink: 0 }}>
-                                <div style={{
-                                    width: 46, height: 46, borderRadius: '50%',
-                                    background: u.avatar ? `url(${u.avatar}) center/cover` : 'linear-gradient(135deg, var(--accent-blue), var(--accent-purple))',
-                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                    color: 'white', fontSize: 14, fontWeight: 800,
-                                }}>
-                                    {!u.avatar && getInitials(u.name)}
-                                </div>
-                                <div style={{
-                                    position: 'absolute', bottom: 1, right: 1,
-                                    width: 12, height: 12, borderRadius: '50%',
-                                    background: u.online ? '#22c55e' : '#6b7280',
-                                    border: '2px solid var(--bg-card)',
-                                }} />
-                            </div>
-                            <div style={{ flex: 1 }}>
-                                <div style={{ fontSize: 14, fontWeight: 700, color: 'var(--text-primary)' }}>{u.name}</div>
-                                <div style={{ fontSize: 11, color: u.online ? 'var(--accent-emerald)' : 'var(--text-muted)' }}>
-                                    {u.online ? '🟢 متصل الآن' : u.department || 'غير متصل'}
-                                </div>
-                            </div>
-                        </button>
-                    ))}
-                    {filteredUsers.length === 0 && (
-                        <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)', fontSize: 13 }}>
-                            <Users size={32} style={{ margin: '0 auto 10px', opacity: 0.4 }} />
-                            <div>لا يوجد موظفين</div>
-                        </div>
-                    )}
-                </div>
-            </div>
-        );
-    }
-
-    // === CHAT VIEW ===
-    if (view === 'chat' && selectedConv) {
-        const otherName = getOtherName(selectedConv);
+    // ================================================
+    // ====== CHAT VIEW (active conversation) ======
+    // ================================================
+    if (activeChat) {
+        const { otherUser } = activeChat;
         return (
             <div className="page-content page-enter" style={{
                 display: 'flex', flexDirection: 'column',
                 height: 'calc(100dvh - var(--nav-height) - 120px)',
                 padding: 0,
             }}>
-                <style>{styles}</style>
+                <style>{css}</style>
 
-                {/* Chat header */}
+                {/* ── Header ── */}
                 <div style={{
-                    display: 'flex', alignItems: 'center', gap: 12,
-                    padding: '12px 16px',
+                    display: 'flex', alignItems: 'center', gap: 10,
+                    padding: '10px 14px',
                     borderBottom: '1px solid var(--border-glass)',
-                    background: 'var(--bg-glass)',
-                    backdropFilter: 'blur(20px)',
+                    background: 'var(--bg-glass)', backdropFilter: 'blur(20px)',
                 }}>
-                    <button onClick={() => { setView('list'); setSelectedConv(null); setShowEmoji(false); setEditingMsg(null); }} style={{
+                    <button onClick={() => { setActiveChat(null); setShowEmoji(false); setEditingMsg(null); setShowAttach(false); }} style={{
                         width: 34, height: 34, borderRadius: 'var(--radius-md)',
                         background: 'var(--bg-glass)', border: '1px solid var(--border-glass)',
-                        color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        cursor: 'pointer',
+                        color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
                     }}>
                         <ArrowRight size={16} />
                     </button>
                     <div style={{ position: 'relative', flexShrink: 0 }}>
                         <div style={{
                             width: 40, height: 40, borderRadius: '50%',
-                            background: 'linear-gradient(135deg, var(--accent-emerald), var(--accent-blue))',
+                            background: otherUser.avatar ? `url(${otherUser.avatar}) center/cover` : 'linear-gradient(135deg, #10b981, #3b82f6)',
                             display: 'flex', alignItems: 'center', justifyContent: 'center',
                             color: 'white', fontSize: 13, fontWeight: 800,
                         }}>
-                            {getInitials(otherName)}
+                            {!otherUser.avatar && getInitials(otherUser.name)}
                         </div>
                         <div style={{
                             position: 'absolute', bottom: 0, right: 0,
@@ -515,43 +415,42 @@ export default function ChatPage({ onBack }: Props) {
                         }} />
                     </div>
                     <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 15, fontWeight: 800 }}>{otherName}</div>
-                        <div style={{ fontSize: 10, color: otherUserOnline ? 'var(--accent-emerald)' : 'var(--text-muted)', fontWeight: 600 }}>
+                        <div style={{ fontSize: 14, fontWeight: 800 }}>{otherUser.name}</div>
+                        <div style={{ fontSize: 10, color: otherUserOnline ? '#22c55e' : 'var(--text-muted)', fontWeight: 600 }}>
                             {otherUserOnline ? '🟢 متصل الآن' : formatLastSeen(otherUserLastSeen)}
                         </div>
                     </div>
-                    {/* Disappear mode toggle */}
+                    {/* Disappear toggle */}
                     <div style={{ position: 'relative' }}>
                         <button onClick={() => setShowDisappearPicker(!showDisappearPicker)} style={{
-                            width: 34, height: 34, borderRadius: 'var(--radius-md)',
+                            width: 32, height: 32, borderRadius: 'var(--radius-md)',
                             background: disappearMode > 0 ? 'rgba(245,158,11,0.12)' : 'var(--bg-glass)',
                             border: `1px solid ${disappearMode > 0 ? 'rgba(245,158,11,0.25)' : 'var(--border-glass)'}`,
-                            color: disappearMode > 0 ? 'var(--accent-amber)' : 'var(--text-muted)',
+                            color: disappearMode > 0 ? '#f59e0b' : 'var(--text-muted)',
                             display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
                         }}>
-                            {disappearMode > 0 ? <EyeOff size={15} /> : <Clock size={15} />}
+                            {disappearMode > 0 ? <EyeOff size={14} /> : <Clock size={14} />}
                         </button>
                         {showDisappearPicker && (
                             <div style={{
-                                position: 'absolute', top: 40, left: 0, zIndex: 50,
+                                position: 'absolute', top: 38, left: 0, zIndex: 50,
                                 background: 'var(--bg-card)', border: '1px solid var(--border-glass)',
-                                borderRadius: 'var(--radius-lg)', padding: 8, minWidth: 130,
-                                boxShadow: '0 8px 32px rgba(0,0,0,0.25)', animation: 'fadeUp 0.15s ease',
+                                borderRadius: 'var(--radius-lg)', padding: 6, minWidth: 130,
+                                boxShadow: '0 8px 32px rgba(0,0,0,0.3)', animation: 'fadeUp 0.15s ease',
                             }}>
-                                <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', padding: '4px 8px', marginBottom: 4 }}>
+                                <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--text-muted)', padding: '4px 8px', marginBottom: 2 }}>
                                     💨 رسائل ذاتية الاختفاء
                                 </div>
                                 {DISAPPEAR_OPTIONS.map(opt => (
                                     <button key={opt.value} onClick={() => { setDisappearMode(opt.value); setShowDisappearPicker(false); }} style={{
-                                        display: 'flex', alignItems: 'center', gap: 8,
-                                        padding: '8px 10px', borderRadius: 'var(--radius-md)',
+                                        display: 'flex', alignItems: 'center', gap: 6,
+                                        padding: '7px 10px', borderRadius: 'var(--radius-md)',
                                         width: '100%', border: 'none', cursor: 'pointer',
                                         background: disappearMode === opt.value ? 'rgba(245,158,11,0.1)' : 'transparent',
-                                        color: disappearMode === opt.value ? 'var(--accent-amber)' : 'var(--text-primary)',
-                                        fontSize: 12, fontWeight: 600, fontFamily: 'var(--font-arabic)',
-                                        transition: 'all 0.15s',
+                                        color: disappearMode === opt.value ? '#f59e0b' : 'var(--text-primary)',
+                                        fontSize: 12, fontWeight: 600, fontFamily: 'var(--font-arabic)', transition: 'all 0.15s',
                                     }}>
-                                        {disappearMode === opt.value && <Check size={12} />}
+                                        {disappearMode === opt.value && <Check size={11} />}
                                         {opt.label}
                                     </button>
                                 ))}
@@ -560,20 +459,20 @@ export default function ChatPage({ onBack }: Props) {
                     </div>
                 </div>
 
-                {/* Disappear mode banner */}
+                {/* Disappear banner */}
                 {disappearMode > 0 && (
                     <div style={{
-                        padding: '6px 16px', background: 'rgba(245,158,11,0.06)',
+                        padding: '5px 14px', background: 'rgba(245,158,11,0.06)',
                         borderBottom: '1px solid rgba(245,158,11,0.12)',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-                        fontSize: 11, fontWeight: 600, color: 'var(--accent-amber)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+                        fontSize: 11, fontWeight: 600, color: '#f59e0b',
                     }}>
-                        <EyeOff size={12} />
+                        <EyeOff size={11} />
                         الرسائل ستختفي بعد {disappearMode < 60 ? `${disappearMode} ث` : `${disappearMode / 60} د`}
                     </div>
                 )}
 
-                {/* Messages */}
+                {/* ── Messages ── */}
                 <div style={{
                     flex: 1, overflowY: 'auto', padding: '12px 14px',
                     display: 'flex', flexDirection: 'column', gap: 6,
@@ -585,105 +484,77 @@ export default function ChatPage({ onBack }: Props) {
                             color: 'var(--text-muted)', fontSize: 13, gap: 8,
                         }}>
                             <MessageCircle size={40} style={{ opacity: 0.2 }} />
-                            <div>ابدأ المحادثة مع {otherName}</div>
+                            <div>ابدأ المحادثة مع {otherUser.name}</div>
                         </div>
                     )}
 
                     {messages.map(msg => {
                         const isMe = msg.senderId === userId;
-                        const isDeleted = msg.deleted === true;
-
+                        const isDel = msg.deleted === true;
                         return (
-                            <div
-                                key={msg.id}
-                                style={{
-                                    display: 'flex',
-                                    justifyContent: isMe ? 'flex-end' : 'flex-start',
-                                    animation: 'msgIn 0.25s ease',
-                                }}
-                                onContextMenu={e => !isDeleted && handleContextMenu(e, msg)}
-                            >
+                            <div key={msg.id} style={{
+                                display: 'flex', justifyContent: isMe ? 'flex-end' : 'flex-start',
+                                animation: 'msgIn 0.2s ease',
+                            }} onContextMenu={e => !isDel && handleContextMenu(e, msg)}>
                                 <div style={{
                                     maxWidth: '80%',
-                                    padding: isDeleted ? '8px 14px' : (msg.type === 'image' ? '4px' : '10px 14px'),
-                                    borderRadius: isMe
-                                        ? '18px 18px 4px 18px'
-                                        : '18px 18px 18px 4px',
-                                    background: isDeleted
-                                        ? 'var(--bg-glass)'
-                                        : isMe
-                                            ? 'linear-gradient(135deg, #3b82f6, #6366f1)'
-                                            : 'var(--bg-card)',
-                                    color: isDeleted ? 'var(--text-muted)' : (isMe ? 'white' : 'var(--text-primary)'),
+                                    padding: isDel ? '8px 14px' : (msg.type === 'image' ? '4px' : '10px 14px'),
+                                    borderRadius: isMe ? '18px 18px 4px 18px' : '18px 18px 18px 4px',
+                                    background: isDel ? 'var(--bg-glass)' : isMe ? 'linear-gradient(135deg, #3b82f6, #6366f1)' : 'var(--bg-card)',
+                                    color: isDel ? 'var(--text-muted)' : (isMe ? 'white' : 'var(--text-primary)'),
                                     border: isMe ? 'none' : '1px solid var(--border-glass)',
                                     fontSize: 13, lineHeight: 1.6,
-                                    fontStyle: isDeleted ? 'italic' : 'normal',
-                                    boxShadow: isDeleted ? 'none' : isMe
-                                        ? '0 3px 12px rgba(59,130,246,0.3)'
-                                        : '0 2px 8px rgba(0,0,0,0.06)',
-                                    position: 'relative',
+                                    fontStyle: isDel ? 'italic' : 'normal',
+                                    boxShadow: isDel ? 'none' : isMe ? '0 3px 12px rgba(59,130,246,0.3)' : '0 2px 8px rgba(0,0,0,0.06)',
                                 }}>
-                                    {/* Image message */}
-                                    {msg.type === 'image' && msg.fileUrl && !isDeleted && (
-                                        <img
-                                            src={msg.fileUrl}
-                                            alt="image"
-                                            onClick={() => setImagePreview(msg.fileUrl!)}
-                                            style={{
-                                                width: '100%', maxWidth: 260, borderRadius: 14,
-                                                cursor: 'pointer', display: 'block',
-                                            }}
-                                        />
+                                    {/* Image */}
+                                    {msg.type === 'image' && msg.fileUrl && !isDel && (
+                                        <img src={msg.fileUrl} alt="" onClick={() => setImagePreview(msg.fileUrl!)} style={{
+                                            width: '100%', maxWidth: 260, borderRadius: 14, cursor: 'pointer', display: 'block',
+                                        }} />
                                     )}
-
-                                    {/* File message */}
-                                    {msg.type === 'file' && msg.fileUrl && !isDeleted && (
+                                    {/* File */}
+                                    {msg.type === 'file' && msg.fileUrl && !isDel && (
                                         <a href={msg.fileUrl} target="_blank" rel="noreferrer" style={{
                                             display: 'flex', alignItems: 'center', gap: 10,
                                             padding: '8px 4px', textDecoration: 'none',
                                             color: isMe ? 'white' : 'var(--text-primary)',
                                         }}>
                                             <div style={{
-                                                width: 38, height: 38, borderRadius: 'var(--radius-md)',
-                                                background: isMe ? 'rgba(255,255,255,0.15)' : 'var(--accent-blue-soft)',
-                                                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                                flexShrink: 0,
+                                                width: 36, height: 36, borderRadius: 'var(--radius-md)',
+                                                background: isMe ? 'rgba(255,255,255,0.15)' : 'rgba(59,130,246,0.1)',
+                                                display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
                                             }}>
-                                                <FileText size={18} style={{ color: isMe ? 'white' : 'var(--accent-blue)' }} />
+                                                <FileText size={16} style={{ color: isMe ? 'white' : '#3b82f6' }} />
                                             </div>
                                             <div>
                                                 <div style={{ fontSize: 12, fontWeight: 700, wordBreak: 'break-all' }}>{msg.fileName}</div>
-                                                <div style={{ fontSize: 10, opacity: 0.7, display: 'flex', alignItems: 'center', gap: 4 }}>
-                                                    <Download size={10} /> {msg.fileSize}
+                                                <div style={{ fontSize: 10, opacity: 0.7, display: 'flex', alignItems: 'center', gap: 3 }}>
+                                                    <Download size={9} /> {msg.fileSize}
                                                 </div>
                                             </div>
                                         </a>
                                     )}
-
                                     {/* Text */}
-                                    {(msg.type === 'text' || !msg.type || isDeleted) && (
-                                        <div>{msg.text}</div>
-                                    )}
-
-                                    {/* Meta row */}
+                                    {(msg.type === 'text' || !msg.type || isDel) && <div>{msg.text}</div>}
+                                    {/* Meta */}
                                     <div style={{
-                                        display: 'flex', alignItems: 'center', gap: 4,
-                                        marginTop: msg.type === 'image' ? 6 : 3,
+                                        display: 'flex', alignItems: 'center', gap: 4, marginTop: 3,
                                         padding: msg.type === 'image' ? '0 8px 4px' : 0,
                                         justifyContent: isMe ? 'flex-start' : 'flex-end',
                                     }}>
-                                        {msg.edited && !isDeleted && (
-                                            <span style={{ fontSize: 8, opacity: 0.6 }}>تم التعديل</span>
-                                        )}
-                                        {msg.disappearAfter && msg.disappearAfter > 0 && !isDeleted && (
-                                            <span className="disappear-badge">
-                                                <EyeOff size={8} />
+                                        {msg.edited && !isDel && <span style={{ fontSize: 8, opacity: 0.6 }}>تم التعديل</span>}
+                                        {msg.disappearAfter && msg.disappearAfter > 0 && !isDel && (
+                                            <span style={{
+                                                display: 'inline-flex', alignItems: 'center', gap: 2,
+                                                padding: '1px 5px', borderRadius: 'var(--radius-full)',
+                                                background: 'rgba(245,158,11,0.15)', color: '#f59e0b', fontSize: 8, fontWeight: 700,
+                                            }}>
+                                                <EyeOff size={7} />
                                                 {msg.disappearAfter < 60 ? `${msg.disappearAfter}ث` : `${msg.disappearAfter / 60}د`}
                                             </span>
                                         )}
-                                        <span style={{ fontSize: 9, opacity: 0.6 }}>
-                                            {formatTime(msg.createdAt)}
-                                        </span>
+                                        <span style={{ fontSize: 9, opacity: 0.6 }}>{formatTime(msg.createdAt)}</span>
                                     </div>
                                 </div>
                             </div>
@@ -692,26 +563,23 @@ export default function ChatPage({ onBack }: Props) {
                     <div ref={messagesEndRef} />
                 </div>
 
-                {/* Context Menu */}
+                {/* Context menu */}
                 {contextMsg && (
-                    <div className="chat-ctx-menu" style={{ top: contextPos.y, right: 20 }}>
+                    <div className="ctx-menu" style={{ top: contextPos.y, right: 20 }}>
                         {contextMsg.senderId === userId && !contextMsg.deleted && contextMsg.type !== 'image' && contextMsg.type !== 'file' && (
-                            <button className="chat-ctx-item" onClick={() => {
-                                setEditingMsg(contextMsg);
-                                setEditText(contextMsg.text);
-                                setContextMsg(null);
+                            <button className="ctx-item" onClick={() => {
+                                setEditingMsg(contextMsg); setEditText(contextMsg.text); setContextMsg(null);
                             }}>
                                 <Edit3 size={14} /> تعديل الرسالة
                             </button>
                         )}
                         {contextMsg.senderId === userId && !contextMsg.deleted && (
-                            <button className="chat-ctx-item danger" onClick={() => handleDeleteMessage(contextMsg)}>
+                            <button className="ctx-item del" onClick={() => handleDeleteMessage(contextMsg)}>
                                 <Trash2 size={14} /> حذف الرسالة
                             </button>
                         )}
-                        <button className="chat-ctx-item" onClick={() => {
-                            navigator.clipboard.writeText(contextMsg.text);
-                            setContextMsg(null);
+                        <button className="ctx-item" onClick={() => {
+                            navigator.clipboard.writeText(contextMsg.text); setContextMsg(null);
                         }}>
                             📋 نسخ النص
                         </button>
@@ -721,19 +589,19 @@ export default function ChatPage({ onBack }: Props) {
                 {/* Editing banner */}
                 {editingMsg && (
                     <div style={{
-                        padding: '8px 16px', display: 'flex', alignItems: 'center', gap: 10,
+                        padding: '8px 14px', display: 'flex', alignItems: 'center', gap: 10,
                         background: 'rgba(59,130,246,0.06)', borderTop: '1px solid rgba(59,130,246,0.12)',
                     }}>
-                        <Edit3 size={14} style={{ color: 'var(--accent-blue)' }} />
+                        <Edit3 size={14} style={{ color: '#3b82f6' }} />
                         <div style={{ flex: 1 }}>
-                            <div style={{ fontSize: 10, fontWeight: 700, color: 'var(--accent-blue)' }}>تعديل الرسالة</div>
+                            <div style={{ fontSize: 10, fontWeight: 700, color: '#3b82f6' }}>تعديل الرسالة</div>
                             <div style={{ fontSize: 11, color: 'var(--text-muted)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{editingMsg.text}</div>
                         </div>
                         <button onClick={() => { setEditingMsg(null); setEditText(''); }} style={{
-                            width: 28, height: 28, borderRadius: '50%', background: 'var(--bg-glass)',
+                            width: 26, height: 26, borderRadius: '50%', background: 'var(--bg-glass)',
                             border: 'none', color: 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
                         }}>
-                            <X size={14} />
+                            <X size={13} />
                         </button>
                     </div>
                 )}
@@ -742,31 +610,24 @@ export default function ChatPage({ onBack }: Props) {
                 {showEmoji && (
                     <div style={{
                         background: 'var(--bg-card)', borderTop: '1px solid var(--border-glass)',
-                        padding: '10px 14px', maxHeight: 260, overflowY: 'auto',
-                        animation: 'slideUp 0.2s ease',
+                        padding: '8px 12px', maxHeight: 250, overflowY: 'auto', animation: 'slideUp 0.2s ease',
                     }}>
-                        {/* Category tabs */}
-                        <div style={{ display: 'flex', gap: 2, marginBottom: 8, overflowX: 'auto' }}>
+                        <div style={{ display: 'flex', gap: 2, marginBottom: 6, overflowX: 'auto' }}>
                             {EMOJI_CATEGORIES.map(cat => (
                                 <button key={cat.id} onClick={() => setEmojiCategory(cat.id)} style={{
-                                    padding: '6px 10px', borderRadius: 'var(--radius-md)',
-                                    background: emojiCategory === cat.id ? 'var(--accent-blue-soft)' : 'transparent',
-                                    border: 'none', fontSize: 18, cursor: 'pointer',
-                                    transition: 'all 0.15s',
+                                    padding: '5px 8px', borderRadius: 'var(--radius-md)',
+                                    background: emojiCategory === cat.id ? 'rgba(59,130,246,0.1)' : 'transparent',
+                                    border: 'none', fontSize: 18, cursor: 'pointer', transition: 'all 0.15s',
                                 }}>
                                     {cat.icon}
                                 </button>
                             ))}
                         </div>
-                        {/* Emoji grid */}
                         <div className="emoji-grid">
                             {EMOJI_CATEGORIES.find(c => c.id === emojiCategory)?.emojis.map((em, i) => (
                                 <button key={i} className="emoji-btn" onClick={() => {
-                                    if (editingMsg) {
-                                        setEditText(prev => prev + em);
-                                    } else {
-                                        setNewMessage(prev => prev + em);
-                                    }
+                                    if (editingMsg) setEditText(p => p + em);
+                                    else setNewMessage(p => p + em);
                                 }}>
                                     {em}
                                 </button>
@@ -775,32 +636,28 @@ export default function ChatPage({ onBack }: Props) {
                     </div>
                 )}
 
-                {/* Upload progress */}
+                {/* Upload indicator */}
                 {uploading && (
                     <div style={{
-                        padding: '10px 16px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                        padding: '8px 14px', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
                         borderTop: '1px solid var(--border-glass)', background: 'var(--bg-glass)',
                     }}>
-                        <Loader2 size={16} style={{ animation: 'spin 1s linear infinite', color: 'var(--accent-blue)' }} />
+                        <Loader2 size={14} style={{ animation: 'spin 1s linear infinite', color: '#3b82f6' }} />
                         <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>جاري رفع الملف...</span>
                     </div>
                 )}
 
-                {/* Message input */}
+                {/* ── Input bar ── */}
                 <div style={{
-                    display: 'flex', alignItems: 'center', gap: 6,
-                    padding: '10px 12px',
-                    borderTop: '1px solid var(--border-glass)',
-                    background: 'var(--bg-card)',
+                    display: 'flex', alignItems: 'center', gap: 5,
+                    padding: '8px 10px', borderTop: '1px solid var(--border-glass)', background: 'var(--bg-card)',
                 }}>
-                    {/* Emoji toggle */}
                     <button onClick={() => { setShowEmoji(!showEmoji); setShowAttach(false); }} style={{
-                        width: 38, height: 38, borderRadius: '50%',
+                        width: 36, height: 36, borderRadius: '50%',
                         background: showEmoji ? 'rgba(245,158,11,0.12)' : 'transparent',
                         border: 'none', cursor: 'pointer',
-                        color: showEmoji ? 'var(--accent-amber)' : 'var(--text-muted)',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        transition: 'all 0.15s', flexShrink: 0,
+                        color: showEmoji ? '#f59e0b' : 'var(--text-muted)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.15s', flexShrink: 0,
                     }}>
                         <Smile size={20} />
                     </button>
@@ -808,167 +665,123 @@ export default function ChatPage({ onBack }: Props) {
                     {/* Attach */}
                     <div style={{ position: 'relative', flexShrink: 0 }}>
                         <button onClick={() => { setShowAttach(!showAttach); setShowEmoji(false); }} style={{
-                            width: 38, height: 38, borderRadius: '50%',
+                            width: 36, height: 36, borderRadius: '50%',
                             background: showAttach ? 'rgba(59,130,246,0.12)' : 'transparent',
                             border: 'none', cursor: 'pointer',
-                            color: showAttach ? 'var(--accent-blue)' : 'var(--text-muted)',
-                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            transition: 'all 0.15s',
+                            color: showAttach ? '#3b82f6' : 'var(--text-muted)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center', transition: 'all 0.15s',
                         }}>
                             <Paperclip size={20} />
                         </button>
                         {showAttach && (
                             <div style={{
-                                position: 'absolute', bottom: 44, right: 0,
+                                position: 'absolute', bottom: 42, right: 0,
                                 background: 'var(--bg-card)', border: '1px solid var(--border-glass)',
-                                borderRadius: 'var(--radius-lg)', padding: 8,
-                                boxShadow: '0 8px 32px rgba(0,0,0,0.25)',
-                                animation: 'fadeUp 0.15s ease', display: 'flex', flexDirection: 'column', gap: 2,
-                                minWidth: 150,
+                                borderRadius: 'var(--radius-lg)', padding: 6,
+                                boxShadow: '0 8px 32px rgba(0,0,0,0.3)',
+                                animation: 'fadeUp 0.15s ease', display: 'flex', flexDirection: 'column', gap: 2, minWidth: 140,
                             }}>
-                                <button className="chat-ctx-item" onClick={() => imageInputRef.current?.click()}>
-                                    <ImageIcon size={15} style={{ color: 'var(--accent-emerald)' }} /> صورة
+                                <button className="ctx-item" onClick={() => { imageInputRef.current?.click(); setShowAttach(false); }}>
+                                    <ImageIcon size={14} style={{ color: '#10b981' }} /> صورة
                                 </button>
-                                <button className="chat-ctx-item" onClick={() => {
-                                    // Camera capture
+                                <button className="ctx-item" onClick={() => {
+                                    setShowAttach(false);
                                     const inp = document.createElement('input');
-                                    inp.type = 'file';
-                                    inp.accept = 'image/*';
-                                    inp.capture = 'environment';
-                                    inp.onchange = (e: any) => {
-                                        const file = e.target.files?.[0];
-                                        if (file) handleFileUpload(file, 'image');
-                                    };
+                                    inp.type = 'file'; inp.accept = 'image/*'; inp.capture = 'environment';
+                                    inp.onchange = (e: any) => { const f = e.target.files?.[0]; if (f) handleFileUpload(f, 'image'); };
                                     inp.click();
                                 }}>
-                                    <Camera size={15} style={{ color: 'var(--accent-blue)' }} /> التقاط صورة
+                                    <Camera size={14} style={{ color: '#3b82f6' }} /> التقاط صورة
                                 </button>
-                                <button className="chat-ctx-item" onClick={() => fileInputRef.current?.click()}>
-                                    <FileText size={15} style={{ color: 'var(--accent-purple)' }} /> ملف
+                                <button className="ctx-item" onClick={() => { fileInputRef.current?.click(); setShowAttach(false); }}>
+                                    <FileText size={14} style={{ color: '#8b5cf6' }} /> ملف
                                 </button>
                             </div>
                         )}
                     </div>
 
-                    {/* Input */}
+                    {/* Text input */}
                     {editingMsg ? (
-                        <input
-                            type="text"
-                            value={editText}
-                            onChange={e => setEditText(e.target.value)}
-                            onKeyDown={e => e.key === 'Enter' && handleEditMessage()}
-                            autoFocus
+                        <input type="text" value={editText} onChange={e => setEditText(e.target.value)}
+                            onKeyDown={e => e.key === 'Enter' && handleEditMessage()} autoFocus
                             style={{
-                                flex: 1, padding: '10px 14px',
-                                borderRadius: 'var(--radius-full)',
-                                background: 'var(--bg-glass)',
-                                border: '1px solid rgba(59,130,246,0.3)',
-                                color: 'var(--text-primary)',
-                                fontSize: 13, fontFamily: 'var(--font-arabic)', outline: 'none',
+                                flex: 1, padding: '9px 14px', borderRadius: 'var(--radius-full)',
+                                background: 'var(--bg-glass)', border: '1px solid rgba(59,130,246,0.3)',
+                                color: 'var(--text-primary)', fontSize: 13, fontFamily: 'var(--font-arabic)', outline: 'none',
                             }}
                         />
                     ) : (
-                        <input
-                            ref={inputRef}
-                            type="text"
-                            placeholder="اكتب رسالة..."
-                            value={newMessage}
-                            onChange={e => setNewMessage(e.target.value)}
+                        <input ref={inputRef} type="text" placeholder="اكتب رسالة..."
+                            value={newMessage} onChange={e => setNewMessage(e.target.value)}
                             onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendMessage()}
                             style={{
-                                flex: 1, padding: '10px 14px',
-                                borderRadius: 'var(--radius-full)',
-                                background: 'var(--bg-glass)',
-                                border: '1px solid var(--border-glass)',
-                                color: 'var(--text-primary)',
-                                fontSize: 13, fontFamily: 'var(--font-arabic)', outline: 'none',
+                                flex: 1, padding: '9px 14px', borderRadius: 'var(--radius-full)',
+                                background: 'var(--bg-glass)', border: '1px solid var(--border-glass)',
+                                color: 'var(--text-primary)', fontSize: 13, fontFamily: 'var(--font-arabic)', outline: 'none',
                             }}
                         />
                     )}
 
-                    {/* Send button */}
+                    {/* Send */}
                     <button
                         onClick={editingMsg ? handleEditMessage : () => sendMessage()}
                         disabled={editingMsg ? !editText.trim() : (!newMessage.trim() || sending)}
                         style={{
-                            width: 42, height: 42, borderRadius: '50%',
+                            width: 40, height: 40, borderRadius: '50%',
                             background: (editingMsg ? editText.trim() : newMessage.trim())
-                                ? 'linear-gradient(135deg, #3b82f6, #6366f1)'
-                                : 'var(--bg-glass)',
+                                ? 'linear-gradient(135deg, #3b82f6, #6366f1)' : 'var(--bg-glass)',
                             border: 'none',
                             color: (editingMsg ? editText.trim() : newMessage.trim()) ? 'white' : 'var(--text-muted)',
                             display: 'flex', alignItems: 'center', justifyContent: 'center',
                             cursor: (editingMsg ? editText.trim() : newMessage.trim()) ? 'pointer' : 'default',
-                            transition: 'all 0.2s ease',
-                            flexShrink: 0,
-                            transform: 'rotate(180deg)',
+                            transition: 'all 0.2s', flexShrink: 0, transform: 'rotate(180deg)',
                             boxShadow: (editingMsg ? editText.trim() : newMessage.trim()) ? '0 4px 14px rgba(59,130,246,0.35)' : 'none',
                         }}
                     >
-                        {editingMsg ? <Check size={18} /> : <Send size={18} />}
+                        {editingMsg ? <Check size={17} /> : <Send size={17} />}
                     </button>
                 </div>
 
-                {/* Hidden file inputs */}
-                <input
-                    ref={imageInputRef}
-                    type="file"
-                    accept="image/*"
-                    style={{ display: 'none' }}
-                    onChange={e => {
-                        const file = e.target.files?.[0];
-                        if (file) handleFileUpload(file, 'image');
-                        e.target.value = '';
-                    }}
-                />
-                <input
-                    ref={fileInputRef}
-                    type="file"
-                    style={{ display: 'none' }}
-                    onChange={e => {
-                        const file = e.target.files?.[0];
-                        if (file) handleFileUpload(file, 'file');
-                        e.target.value = '';
-                    }}
-                />
+                {/* Hidden inputs */}
+                <input ref={imageInputRef} type="file" accept="image/*" style={{ display: 'none' }}
+                    onChange={e => { const f = e.target.files?.[0]; if (f) handleFileUpload(f, 'image'); e.target.value = ''; }} />
+                <input ref={fileInputRef} type="file" style={{ display: 'none' }}
+                    onChange={e => { const f = e.target.files?.[0]; if (f) handleFileUpload(f, 'file'); e.target.value = ''; }} />
 
                 {/* Image lightbox */}
                 {imagePreview && (
                     <div onClick={() => setImagePreview(null)} style={{
                         position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-                        background: 'rgba(0,0,0,0.9)', zIndex: 9999,
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        cursor: 'pointer',
+                        background: 'rgba(0,0,0,0.92)', zIndex: 9999,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
                     }}>
                         <button onClick={() => setImagePreview(null)} style={{
-                            position: 'absolute', top: 20, right: 20,
-                            width: 40, height: 40, borderRadius: '50%',
-                            background: 'rgba(255,255,255,0.15)', border: 'none',
-                            color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            cursor: 'pointer', zIndex: 10,
+                            position: 'absolute', top: 16, right: 16, width: 40, height: 40, borderRadius: '50%',
+                            background: 'rgba(255,255,255,0.12)', border: 'none', color: 'white',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', zIndex: 10,
                         }}>
                             <X size={20} />
                         </button>
-                        <img src={imagePreview} alt="preview" style={{
-                            maxWidth: '92%', maxHeight: '85vh', borderRadius: 12,
-                            objectFit: 'contain',
-                        }} />
+                        <img src={imagePreview} alt="" style={{ maxWidth: '92%', maxHeight: '85vh', borderRadius: 12, objectFit: 'contain' }} />
                     </div>
                 )}
             </div>
         );
     }
 
-    // === CONVERSATIONS LIST ===
+    // ================================================
+    // ====== MAIN LIST (employees + conversations) ===
+    // ================================================
     return (
         <div className="page-content page-enter">
-            <style>{styles}</style>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16 }}>
+            <style>{css}</style>
+
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 14 }}>
                 <button onClick={onBack} style={{
                     width: 36, height: 36, borderRadius: 'var(--radius-md)',
                     background: 'var(--bg-glass)', border: '1px solid var(--border-glass)',
-                    color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    cursor: 'pointer',
+                    color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
                 }}>
                     <ArrowRight size={18} />
                 </button>
@@ -976,99 +789,139 @@ export default function ChatPage({ onBack }: Props) {
                     <h2 style={{ fontSize: 18, fontWeight: 800 }}>المحادثات</h2>
                     <p style={{ fontSize: 11, color: 'var(--text-muted)' }}>تواصل مع زملائك</p>
                 </div>
-                <button
-                    onClick={() => { setView('newChat'); loadUsers(); }}
-                    style={{
-                        padding: '8px 14px',
-                        borderRadius: 'var(--radius-lg)',
-                        background: 'linear-gradient(135deg, #3b82f6, #6366f1)',
-                        border: 'none', color: 'white',
-                        fontSize: 12, fontWeight: 700,
-                        cursor: 'pointer',
-                        display: 'flex', alignItems: 'center', gap: 6,
-                        fontFamily: 'var(--font-arabic)',
-                        boxShadow: '0 4px 14px rgba(59,130,246,0.3)',
-                    }}
-                >
-                    <MessageCircle size={14} />
-                    محادثة جديدة
-                </button>
             </div>
 
+            {/* ── Employees horizontal scroll ── */}
+            <div style={{ marginBottom: 16 }}>
+                <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-muted)', marginBottom: 8 }}>
+                    <Users size={13} style={{ verticalAlign: 'middle', marginLeft: 4 }} />
+                    الموظفين — اختر لبدء المحادثة
+                </div>
+                <div style={{
+                    display: 'flex', gap: 10, overflowX: 'auto',
+                    paddingBottom: 6, WebkitOverflowScrolling: 'touch',
+                }}>
+                    {allUsers.map(u => (
+                        <button key={u.id} onClick={() => openChatWith(u)} style={{
+                            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
+                            padding: '10px 8px', minWidth: 72,
+                            borderRadius: 'var(--radius-xl)',
+                            background: 'var(--bg-card)',
+                            border: '1px solid var(--border-glass)',
+                            cursor: 'pointer', transition: 'all 0.2s',
+                            fontFamily: 'var(--font-arabic)',
+                            boxShadow: '0 2px 8px rgba(0,0,0,0.05)',
+                            flexShrink: 0,
+                        }}>
+                            <div style={{ position: 'relative' }}>
+                                <div style={{
+                                    width: 44, height: 44, borderRadius: '50%',
+                                    background: u.avatar ? `url(${u.avatar}) center/cover` : 'linear-gradient(135deg, #3b82f6, #8b5cf6)',
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                    color: 'white', fontSize: 14, fontWeight: 800,
+                                }}>
+                                    {!u.avatar && getInitials(u.name)}
+                                </div>
+                                <div style={{
+                                    position: 'absolute', bottom: 0, right: 0,
+                                    width: 12, height: 12, borderRadius: '50%',
+                                    background: u.online ? '#22c55e' : '#6b7280',
+                                    border: '2.5px solid var(--bg-card)',
+                                }} />
+                            </div>
+                            <div style={{
+                                fontSize: 11, fontWeight: 600, color: 'var(--text-primary)',
+                                maxWidth: 60, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                textAlign: 'center',
+                            }}>
+                                {u.name.split(' ')[0]}
+                            </div>
+                        </button>
+                    ))}
+                    {allUsers.length === 0 && usersLoaded && (
+                        <div style={{ padding: '10px 20px', fontSize: 12, color: 'var(--text-muted)' }}>لا يوجد موظفين</div>
+                    )}
+                </div>
+            </div>
+
+            {/* ── Search ── */}
+            <div style={{ position: 'relative', marginBottom: 14 }}>
+                <Search size={15} style={{
+                    position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--text-muted)',
+                }} />
+                <input type="text" placeholder="بحث في المحادثات..." value={search} onChange={e => setSearch(e.target.value)}
+                    style={{
+                        width: '100%', padding: '10px 38px 10px 14px',
+                        borderRadius: 'var(--radius-lg)', background: 'var(--bg-glass)',
+                        border: '1px solid var(--border-glass)', color: 'var(--text-primary)',
+                        fontSize: 13, fontFamily: 'var(--font-arabic)', outline: 'none',
+                    }}
+                />
+            </div>
+
+            {/* ── Conversations ── */}
             {loading ? (
-                <div style={{ textAlign: 'center', padding: 60, color: 'var(--text-muted)' }}>
-                    <Loader2 size={32} style={{ margin: '0 auto 10px', animation: 'spin 1s linear infinite' }} />
+                <div style={{ textAlign: 'center', padding: 50, color: 'var(--text-muted)' }}>
+                    <Loader2 size={28} style={{ margin: '0 auto 10px', animation: 'spin 1s linear infinite' }} />
                     <div style={{ fontSize: 13 }}>جاري التحميل...</div>
                 </div>
             ) : conversations.length === 0 ? (
-                <div style={{
-                    textAlign: 'center', padding: '60px 20px',
-                    color: 'var(--text-muted)',
-                }}>
+                <div style={{ textAlign: 'center', padding: '40px 20px', color: 'var(--text-muted)' }}>
                     <div style={{
-                        width: 80, height: 80, borderRadius: '50%',
-                        background: 'rgba(59,130,246,0.08)', margin: '0 auto 16px',
+                        width: 70, height: 70, borderRadius: '50%',
+                        background: 'rgba(59,130,246,0.08)', margin: '0 auto 14px',
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
                     }}>
-                        <MessageCircle size={36} style={{ opacity: 0.4, color: 'var(--accent-blue)' }} />
+                        <MessageCircle size={30} style={{ opacity: 0.4, color: '#3b82f6' }} />
                     </div>
-                    <div style={{ fontSize: 15, fontWeight: 700, marginBottom: 6 }}>لا توجد محادثات</div>
-                    <div style={{ fontSize: 12 }}>ابدأ محادثة جديدة مع أحد زملائك</div>
+                    <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 4 }}>لا توجد محادثات بعد</div>
+                    <div style={{ fontSize: 12 }}>اختر موظفاً من الأعلى لبدء المحادثة</div>
                 </div>
             ) : (
-                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-                    {conversations.map(conv => {
-                        const otherName = getOtherName(conv);
-                        return (
-                            <button
-                                key={conv.id}
-                                onClick={() => { setSelectedConv(conv); setView('chat'); }}
-                                style={{
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {conversations
+                        .filter(c => {
+                            if (!search.trim()) return true;
+                            return getConvOtherName(c).toLowerCase().includes(search.toLowerCase());
+                        })
+                        .map(conv => {
+                            const otherName = getConvOtherName(conv);
+                            return (
+                                <button key={conv.id} onClick={() => openExistingConv(conv)} style={{
                                     display: 'flex', alignItems: 'center', gap: 12,
-                                    padding: '14px',
-                                    borderRadius: 'var(--radius-xl)',
-                                    background: 'var(--bg-card)',
-                                    border: '1px solid var(--border-glass)',
-                                    cursor: 'pointer', textAlign: 'right',
-                                    width: '100%',
-                                    transition: 'all 0.2s',
-                                    fontFamily: 'var(--font-arabic)',
-                                    boxShadow: '0 2px 8px rgba(0,0,0,0.06)',
-                                }}
-                            >
-                                <div style={{ position: 'relative', flexShrink: 0 }}>
+                                    padding: '12px 14px', borderRadius: 'var(--radius-xl)',
+                                    background: 'var(--bg-card)', border: '1px solid var(--border-glass)',
+                                    cursor: 'pointer', textAlign: 'right', width: '100%',
+                                    transition: 'all 0.2s', fontFamily: 'var(--font-arabic)',
+                                    boxShadow: '0 2px 8px rgba(0,0,0,0.05)',
+                                }}>
                                     <div style={{
-                                        width: 50, height: 50, borderRadius: '50%',
-                                        background: 'linear-gradient(135deg, var(--accent-emerald), var(--accent-blue))',
+                                        width: 48, height: 48, borderRadius: '50%',
+                                        background: 'linear-gradient(135deg, #10b981, #3b82f6)',
                                         display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                        color: 'white', fontSize: 16, fontWeight: 800,
+                                        color: 'white', fontSize: 15, fontWeight: 800, flexShrink: 0,
                                     }}>
                                         {getInitials(otherName)}
                                     </div>
-                                </div>
-                                <div style={{ flex: 1, minWidth: 0 }}>
-                                    <div style={{
-                                        display: 'flex', justifyContent: 'space-between',
-                                        alignItems: 'center', marginBottom: 4,
-                                    }}>
-                                        <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text-primary)' }}>
-                                            {otherName}
+                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                        <div style={{
+                                            display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 3,
+                                        }}>
+                                            <div style={{ fontSize: 14, fontWeight: 800, color: 'var(--text-primary)' }}>{otherName}</div>
+                                            <div style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-numeric)' }}>
+                                                {formatTime(conv.lastMessageAt)}
+                                            </div>
                                         </div>
-                                        <div style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-numeric)' }}>
-                                            {formatTime(conv.lastMessageAt)}
+                                        <div style={{
+                                            fontSize: 12, color: 'var(--text-muted)',
+                                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                        }}>
+                                            {conv.lastMessage || 'لا توجد رسائل بعد'}
                                         </div>
                                     </div>
-                                    <div style={{
-                                        fontSize: 12, color: 'var(--text-muted)',
-                                        overflow: 'hidden', textOverflow: 'ellipsis',
-                                        whiteSpace: 'nowrap',
-                                    }}>
-                                        {conv.lastMessage || 'لا توجد رسائل بعد'}
-                                    </div>
-                                </div>
-                            </button>
-                        );
-                    })}
+                                </button>
+                            );
+                        })}
                 </div>
             )}
         </div>
