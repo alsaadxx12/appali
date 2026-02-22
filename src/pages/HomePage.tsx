@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Clock, MapPin, Timer, AlertTriangle, CheckCircle, Coffee, RefreshCw, Lock, ShieldAlert } from 'lucide-react';
+import { Clock, MapPin, Timer, AlertTriangle, CheckCircle, Coffee, RefreshCw, Lock, ShieldAlert, Fingerprint } from 'lucide-react';
 import AttendanceButton from '../components/AttendanceButton';
 import StatusCard from '../components/StatusCard';
 import { useAttendance } from '../context/AttendanceContext';
@@ -11,6 +11,7 @@ import { db } from '../firebase';
 import { collection, getDocs, query, where } from 'firebase/firestore';
 import {
     verifyBiometric,
+    isBiometricAvailable,
     getBiometricSettings,
     BiometricSettings,
 } from '../utils/biometricAuth';
@@ -27,6 +28,9 @@ export default function HomePage() {
     const [branchLoading, setBranchLoading] = useState(true);
     const [biometricSettings, setBiometricSettings] = useState<BiometricSettings | null>(null);
     const [biometricError, setBiometricError] = useState('');
+    const [biometricVerified, setBiometricVerified] = useState(false);
+    const [showBiometricOverlay, setShowBiometricOverlay] = useState(false);
+    const [biometricLoading, setBiometricLoading] = useState(false);
 
     // Update clock every second
     useEffect(() => {
@@ -63,10 +67,17 @@ export default function HomePage() {
         loadBranch();
     }, [user?.branch]);
 
-    // Load biometric settings
+    // Load biometric settings & auto-trigger verification
     useEffect(() => {
-        getBiometricSettings().then(s => setBiometricSettings(s));
-    }, []);
+        const loadAndCheck = async () => {
+            const settings = await getBiometricSettings();
+            setBiometricSettings(settings);
+            if (settings.enabled && user?.id) {
+                setShowBiometricOverlay(true);
+            }
+        };
+        loadAndCheck();
+    }, [user?.id]);
 
     // Get location once branch is loaded
     useEffect(() => {
@@ -97,6 +108,20 @@ export default function HomePage() {
         }
     };
 
+    const handleBiometricVerify = async () => {
+        if (!user?.id) return;
+        setBiometricLoading(true);
+        setBiometricError('');
+        const result = await verifyBiometric(user.id);
+        setBiometricLoading(false);
+        if (result.success) {
+            setBiometricVerified(true);
+            setShowBiometricOverlay(false);
+        } else {
+            setBiometricError(result.error || 'فشل التحقق من الهوية');
+        }
+    };
+
     const handleAttendancePress = async () => {
         if (!userBranch) return;
         setBiometricError('');
@@ -123,13 +148,10 @@ export default function HomePage() {
             setLocationStatus('inactive');
             return; // Block - out of range
         }
-        // Native biometric auth (Face ID / fingerprint / device passcode)
-        if (biometricSettings?.enabled && user?.id) {
-            const result = await verifyBiometric(user.id);
-            if (!result.success) {
-                setBiometricError(result.error || 'فشل التحقق من الهوية');
-                return;
-            }
+        // Biometric already verified on page load
+        if (biometricSettings?.enabled && !biometricVerified) {
+            setShowBiometricOverlay(true);
+            return;
         }
 
         if (isCheckedIn) {
@@ -149,6 +171,79 @@ export default function HomePage() {
 
     return (
         <div className="page-content page-enter">
+            {/* Biometric Verification Overlay */}
+            {showBiometricOverlay && (
+                <div style={{
+                    position: 'fixed', inset: 0, zIndex: 9999,
+                    background: 'rgba(0,0,0,0.7)', backdropFilter: 'blur(12px)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    padding: 20,
+                }}>
+                    <div className="glass-card" style={{
+                        width: '100%', maxWidth: 340, padding: '32px 24px',
+                        textAlign: 'center',
+                    }}>
+                        <div style={{
+                            width: 80, height: 80, borderRadius: '50%', margin: '0 auto 18px',
+                            background: 'linear-gradient(135deg, rgba(59,130,246,0.15), rgba(139,92,246,0.1))',
+                            border: '2px solid rgba(59,130,246,0.3)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            color: 'var(--accent-blue)',
+                            animation: 'leavePendingPulse 2s ease-in-out infinite',
+                        }}>
+                            <Fingerprint size={40} />
+                        </div>
+
+                        <div style={{ fontSize: 18, fontWeight: 800, marginBottom: 6 }}>
+                            التحقق من الهوية
+                        </div>
+                        <div style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 24, lineHeight: 1.6 }}>
+                            اضغط الزر أدناه للتحقق عبر
+                            <br />Face ID / بصمة / رمز قفل الهاتف
+                        </div>
+
+                        {biometricError && (
+                            <div style={{
+                                fontSize: 12, color: 'var(--accent-rose)', fontWeight: 600,
+                                marginBottom: 14, padding: '10px 12px', borderRadius: 'var(--radius-sm)',
+                                background: 'rgba(244,63,94,0.08)', border: '1px solid rgba(244,63,94,0.15)',
+                            }}>
+                                {biometricError}
+                            </div>
+                        )}
+
+                        <button
+                            onClick={handleBiometricVerify}
+                            disabled={biometricLoading}
+                            style={{
+                                width: '100%', padding: '16px', borderRadius: 'var(--radius-md)',
+                                background: 'linear-gradient(135deg, var(--accent-blue), #7c3aed)',
+                                border: 'none', color: 'white',
+                                fontSize: 15, fontWeight: 800, cursor: 'pointer',
+                                opacity: biometricLoading ? 0.7 : 1,
+                                transition: 'all 200ms ease',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                            }}
+                        >
+                            <Fingerprint size={20} />
+                            {biometricLoading ? 'جاري التحقق...' : 'تحقق الآن'}
+                        </button>
+
+                        <button
+                            onClick={() => { setShowBiometricOverlay(false); setBiometricVerified(true); }}
+                            style={{
+                                marginTop: 12, padding: '8px',
+                                background: 'none', border: 'none',
+                                color: 'var(--text-muted)', fontSize: 11,
+                                cursor: 'pointer', textDecoration: 'underline',
+                            }}
+                        >
+                            تخطي (للتجربة فقط)
+                        </button>
+                    </div>
+                </div>
+            )}
+
             {/* Digital Clock */}
             <div className="digital-clock">
                 <div className="clock-time">
