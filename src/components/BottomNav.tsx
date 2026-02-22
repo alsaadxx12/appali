@@ -28,17 +28,17 @@ export default function BottomNav({ currentPage, onPageChange }: BottomNavProps)
                 {/* User Avatar */}
                 {user?.avatar ? (
                     <img src={user.avatar} alt="" style={{
-                        width: 30, height: 30, borderRadius: '50%',
+                        width: 34, height: 34, borderRadius: '50%',
                         border: currentPage === 'profile' ? '2px solid var(--accent-blue)' : '2px solid transparent',
                         transition: 'all 200ms ease',
                         objectFit: 'cover',
                     }} />
                 ) : (
                     <div style={{
-                        width: 30, height: 30, borderRadius: '50%',
+                        width: 34, height: 34, borderRadius: '50%',
                         background: avatarColor,
                         display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        fontSize: 11, fontWeight: 800, color: 'white',
+                        fontSize: 12, fontWeight: 800, color: 'white',
                         border: currentPage === 'profile' ? '2px solid var(--accent-blue)' : '2px solid transparent',
                         transition: 'all 200ms ease',
                     }}>

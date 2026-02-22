@@ -36,16 +36,16 @@ export default function Header({ onNavigateProfile, onNavigateNotifications, onN
     return (
         <header className="app-header" style={{
             justifyContent: 'flex-end',
-            padding: '8px 16px',
-            paddingTop: 'calc(20px + var(--safe-top))',
+            padding: '4px 16px',
+            paddingTop: 'calc(12px + var(--safe-top))',
             gap: 10,
-            minHeight: 40,
+            minHeight: 32,
         }}>
             {/* Chat button */}
             <button
                 onClick={onNavigateChat}
                 style={{
-                    width: 38, height: 38, borderRadius: 'var(--radius-full)',
+                    width: 34, height: 34, borderRadius: 'var(--radius-full)',
                     background: 'linear-gradient(135deg, rgba(59,130,246,0.15), rgba(139,92,246,0.15))',
                     border: '1px solid rgba(99,102,241,0.2)',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -54,14 +54,14 @@ export default function Header({ onNavigateProfile, onNavigateNotifications, onN
                     transition: 'all 0.2s ease',
                 }}
             >
-                <MessageCircle size={18} />
+                <MessageCircle size={20} />
             </button>
 
             {/* Notification bell */}
             <button
                 onClick={onNavigateNotifications}
                 style={{
-                    width: 38, height: 38, borderRadius: 'var(--radius-full)',
+                    width: 34, height: 34, borderRadius: 'var(--radius-full)',
                     background: 'linear-gradient(135deg, rgba(245,158,11,0.15), rgba(251,191,36,0.12))',
                     border: '1px solid rgba(245,158,11,0.2)',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -70,7 +70,7 @@ export default function Header({ onNavigateProfile, onNavigateNotifications, onN
                     transition: 'all 0.2s ease',
                 }}
             >
-                <Bell size={18} />
+                <Bell size={20} />
                 {unreadCount > 0 && (
                     <div style={{
                         position: 'absolute', top: 6, right: 6,
