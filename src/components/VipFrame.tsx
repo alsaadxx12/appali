@@ -74,9 +74,33 @@ let cachedFrameData: {
     vipLevels: VipLevelData[];
 } | null = null;
 
+// Cache key for localStorage persistence
+const FRAME_CACHE_KEY = 'vipFrameCache';
+
+function loadPersistentCache(): typeof cachedFrameData {
+    try {
+        const raw = localStorage.getItem(FRAME_CACHE_KEY);
+        if (raw) return JSON.parse(raw);
+    } catch { /* ignore */ }
+    return null;
+}
+
+function savePersistentCache(data: typeof cachedFrameData) {
+    try {
+        if (data) localStorage.setItem(FRAME_CACHE_KEY, JSON.stringify(data));
+    } catch { /* ignore */ }
+}
+
+// Initialize memory cache from localStorage on module load (synchronous, instant)
+if (!cachedFrameData) {
+    cachedFrameData = loadPersistentCache();
+    if (cachedFrameData?.vipLevels) cachedVipLevels = cachedFrameData.vipLevels;
+}
+
 // Export cache invalidation for when settings are saved
 export function invalidateFrameCache() {
     cachedFrameData = null;
+    try { localStorage.removeItem(FRAME_CACHE_KEY); } catch { /* ignore */ }
 }
 
 function useFrameData(): {
@@ -99,7 +123,8 @@ function useFrameData(): {
     };
 
     useEffect(() => {
-        if (cachedFrameData) return; // Already loaded
+        // If we have cached data, still refresh from Firestore in background
+        const hasCache = !!cachedFrameData && Object.keys(cachedFrameData.images).length > 0;
 
         const load = async () => {
             try {
@@ -130,29 +155,35 @@ function useFrameData(): {
                 }
             } catch (e) {
                 console.error('Error loading frames from Firestore:', e);
+                // If we have cache, that's fine — we'll use it
+                if (hasCache) return;
             }
 
-            // Fallback to localStorage
-            try {
-                const framesJson = localStorage.getItem('vipFrames');
-                const levelFramesJson = localStorage.getItem('vipLevelFrames');
-                const adjJson = localStorage.getItem('vipFrameAdjustments');
-                if (framesJson && levelFramesJson) {
-                    processData(
-                        JSON.parse(framesJson),
-                        JSON.parse(levelFramesJson),
-                        adjJson ? JSON.parse(adjJson) : {}
-                    );
-                }
-            } catch { /* ignore */ }
+            // Fallback to localStorage only if no Firestore data and no cache
+            if (!hasCache) {
+                try {
+                    const framesJson = localStorage.getItem('vipFrames');
+                    const levelFramesJson = localStorage.getItem('vipLevelFrames');
+                    const adjJson = localStorage.getItem('vipFrameAdjustments');
+                    if (framesJson && levelFramesJson) {
+                        processData(
+                            JSON.parse(framesJson),
+                            JSON.parse(levelFramesJson),
+                            adjJson ? JSON.parse(adjJson) : {}
+                        );
+                    }
+                } catch { /* ignore */ }
+            }
         };
         load();
     }, []);
 
-    // Update cache
+    // Update both memory + persistent cache
     useEffect(() => {
         if (Object.keys(images).length > 0 || vipLevels.length > 0) {
-            cachedFrameData = { images, adjustments, vipLevels };
+            const newCache = { images, adjustments, vipLevels };
+            cachedFrameData = newCache;
+            savePersistentCache(newCache);
         }
     }, [images, adjustments, vipLevels]);
 
