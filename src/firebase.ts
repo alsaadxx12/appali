@@ -1,6 +1,6 @@
 import { initializeApp } from "firebase/app";
-import { getAuth, GoogleAuthProvider } from "firebase/auth";
-import { getFirestore } from "firebase/firestore";
+import { getAuth, GoogleAuthProvider, browserLocalPersistence, setPersistence } from "firebase/auth";
+import { getFirestore, enableIndexedDbPersistence } from "firebase/firestore";
 
 const firebaseConfig = {
     apiKey: "AIzaSyA-opqMrshlSsRd43YfPi3G0NZcb-Z2u3c",
@@ -16,5 +16,17 @@ const app = initializeApp(firebaseConfig);
 export const auth = getAuth(app);
 export const db = getFirestore(app);
 export const googleProvider = new GoogleAuthProvider();
+
+// Persist auth session across app restarts (IndexedDB)
+setPersistence(auth, browserLocalPersistence).catch(console.error);
+
+// Enable Firestore offline cache (IndexedDB)
+enableIndexedDbPersistence(db).catch((err) => {
+    if (err.code === 'failed-precondition') {
+        console.warn('Firestore persistence: multiple tabs open');
+    } else if (err.code === 'unimplemented') {
+        console.warn('Firestore persistence: browser not supported');
+    }
+});
 
 export default app;

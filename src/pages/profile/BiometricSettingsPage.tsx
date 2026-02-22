@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import {
     ArrowRight, Lock, ShieldCheck, ShieldAlert,
     CheckCircle, XCircle, Smartphone, AlertTriangle, Loader2,
-    Camera, Trash2, User
+    Camera, Trash2, User, Eye
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import {
@@ -19,6 +19,10 @@ import {
     loadFaceModels,
     startCamera,
     stopCamera,
+    isIrisRegistered,
+    getIrisPhoto,
+    registerIris,
+    removeIrisData,
 } from '../../utils/faceAuth';
 
 interface Props {
@@ -44,12 +48,23 @@ export default function BiometricSettingsPage({ onBack }: Props) {
     const isAdmin = user?.role === 'admin';
     const userId = user?.id || '';
 
+    // Iris recognition
+    const [hasIris, setHasIris] = useState(false);
+    const [irisPhoto, setIrisPhoto] = useState<string | null>(null);
+    const [showIrisCamera, setShowIrisCamera] = useState(false);
+    const [irisCameraReady, setIrisCameraReady] = useState(false);
+    const [irisLoading, setIrisLoading] = useState(false);
+    const [irisMessage, setIrisMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+    const irisVideoRef = useRef<HTMLVideoElement>(null);
+    const irisStreamRef = useRef<MediaStream | null>(null);
+
     useEffect(() => { init(); }, []);
 
-    // Cleanup camera
+    // Cleanup cameras
     useEffect(() => {
         return () => {
             stopCamera(streamRef.current);
+            stopCamera(irisStreamRef.current);
         };
     }, []);
 
@@ -65,6 +80,8 @@ export default function BiometricSettingsPage({ onBack }: Props) {
             if (userId) {
                 setHasFace(isFaceRegistered(userId));
                 setFacePhoto(getFacePhoto(userId));
+                setHasIris(isIrisRegistered(userId));
+                setIrisPhoto(getIrisPhoto(userId));
             }
         } catch (e) {
             console.error('Error initializing:', e);
@@ -148,6 +165,67 @@ export default function BiometricSettingsPage({ onBack }: Props) {
         setHasFace(false);
         setFacePhoto(null);
         setFaceMessage({ type: 'success', text: 'تم حذف بيانات الوجه' });
+    };
+
+    // ========== Iris Handlers ==========
+    const handleOpenIrisCamera = async () => {
+        setShowIrisCamera(true);
+        setIrisCameraReady(false);
+        setIrisMessage(null);
+        setIrisLoading(true);
+
+        const loaded = await loadFaceModels();
+        if (!loaded) {
+            setIrisMessage({ type: 'error', text: 'فشل تحميل النماذج' });
+            setIrisLoading(false);
+            return;
+        }
+
+        await new Promise(r => setTimeout(r, 300));
+        if (!irisVideoRef.current) return;
+
+        const stream = await startCamera(irisVideoRef.current);
+        if (!stream) {
+            setIrisMessage({ type: 'error', text: 'فشل فتح الكاميرا' });
+            setIrisLoading(false);
+            return;
+        }
+        irisStreamRef.current = stream;
+        setIrisCameraReady(true);
+        setIrisLoading(false);
+    };
+
+    const handleCaptureIris = async () => {
+        if (!irisVideoRef.current || !userId) return;
+        setIrisLoading(true);
+        setIrisMessage(null);
+
+        const result = await registerIris(userId, irisVideoRef.current);
+        setIrisLoading(false);
+
+        if (result.success) {
+            setIrisMessage({ type: 'success', text: 'تم تسجيل قزحية العين بنجاح! ✅' });
+            setHasIris(true);
+            if (result.photo) setIrisPhoto(result.photo);
+            setTimeout(() => handleCloseIrisCamera(), 1500);
+        } else {
+            setIrisMessage({ type: 'error', text: result.error || 'فشل تسجيل القزحية' });
+        }
+    };
+
+    const handleCloseIrisCamera = () => {
+        stopCamera(irisStreamRef.current);
+        irisStreamRef.current = null;
+        setShowIrisCamera(false);
+        setIrisCameraReady(false);
+    };
+
+    const handleRemoveIris = () => {
+        if (!userId) return;
+        removeIrisData(userId);
+        setHasIris(false);
+        setIrisPhoto(null);
+        setIrisMessage({ type: 'success', text: 'تم حذف بيانات القزحية' });
     };
 
     if (loading) {
@@ -389,6 +467,165 @@ export default function BiometricSettingsPage({ onBack }: Props) {
                     >
                         <User size={18} />
                         تسجيل وجه جديد
+                    </button>
+                )}
+            </div>
+
+            {/* ========== Iris Registration Section ========== */}
+            <div className="glass-card" style={{ padding: '16px', marginBottom: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+                    <Eye size={20} style={{ color: '#8b5cf6' }} />
+                    <div style={{ fontSize: 14, fontWeight: 800 }}>مسح قزحية العين</div>
+                </div>
+
+                {/* Iris Camera View */}
+                {showIrisCamera && (
+                    <div style={{ marginBottom: 14 }}>
+                        <div style={{
+                            position: 'relative', width: '100%', aspectRatio: '4/3',
+                            borderRadius: 'var(--radius-md)', overflow: 'hidden',
+                            background: '#000', border: '2px solid #8b5cf6',
+                            marginBottom: 10,
+                        }}>
+                            <video
+                                ref={irisVideoRef}
+                                autoPlay playsInline muted
+                                style={{
+                                    width: '100%', height: '100%', objectFit: 'cover',
+                                    transform: 'scaleX(-1)',
+                                }}
+                            />
+                            {!irisCameraReady && (
+                                <div style={{
+                                    position: 'absolute', inset: 0,
+                                    background: 'rgba(0,0,0,0.7)',
+                                    display: 'flex', flexDirection: 'column',
+                                    alignItems: 'center', justifyContent: 'center', gap: 8,
+                                    color: 'white',
+                                }}>
+                                    <Loader2 size={28} style={{ animation: 'spin 1s linear infinite' }} />
+                                    <div style={{ fontSize: 12 }}>جاري تحميل الكاميرا...</div>
+                                </div>
+                            )}
+                            {/* Eye guide circles */}
+                            {irisCameraReady && (
+                                <div style={{
+                                    position: 'absolute', inset: 0,
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                    gap: 60, pointerEvents: 'none',
+                                }}>
+                                    <div style={{
+                                        width: 60, height: 40, borderRadius: '50%',
+                                        border: '2px dashed rgba(139,92,246,0.6)',
+                                    }} />
+                                    <div style={{
+                                        width: 60, height: 40, borderRadius: '50%',
+                                        border: '2px dashed rgba(139,92,246,0.6)',
+                                    }} />
+                                </div>
+                            )}
+                        </div>
+
+                        <div style={{ display: 'flex', gap: 8 }}>
+                            <button
+                                onClick={handleCaptureIris}
+                                disabled={!irisCameraReady || irisLoading}
+                                style={{
+                                    flex: 1, padding: '12px', borderRadius: 'var(--radius-md)',
+                                    background: irisCameraReady ? 'linear-gradient(135deg, #8b5cf6, #a855f7)' : 'var(--bg-glass-strong)',
+                                    border: 'none', color: irisCameraReady ? 'white' : 'var(--text-muted)',
+                                    fontSize: 13, fontWeight: 700, cursor: 'pointer',
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                                    opacity: irisLoading ? 0.6 : 1,
+                                }}
+                            >
+                                <Eye size={16} />
+                                {irisLoading ? 'جاري المسح...' : 'مسح القزحية'}
+                            </button>
+                            <button
+                                onClick={handleCloseIrisCamera}
+                                style={{
+                                    padding: '12px 16px', borderRadius: 'var(--radius-md)',
+                                    background: 'var(--bg-glass)', border: '1px solid var(--border-glass)',
+                                    color: 'var(--text-secondary)', fontSize: 13, fontWeight: 700, cursor: 'pointer',
+                                }}
+                            >
+                                إلغاء
+                            </button>
+                        </div>
+                    </div>
+                )}
+
+                {/* Iris Messages */}
+                {irisMessage && (
+                    <div style={{
+                        fontSize: 12, fontWeight: 600, marginBottom: 10,
+                        padding: '8px 12px', borderRadius: 'var(--radius-sm)',
+                        color: irisMessage.type === 'success' ? 'var(--accent-emerald)' : 'var(--accent-rose)',
+                        background: irisMessage.type === 'success' ? 'rgba(16,185,129,0.08)' : 'rgba(244,63,94,0.08)',
+                    }}>
+                        {irisMessage.text}
+                    </div>
+                )}
+
+                {/* Registered Iris Preview */}
+                {hasIris && irisPhoto && !showIrisCamera ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <div style={{
+                            width: 64, height: 64, borderRadius: 'var(--radius-md)', overflow: 'hidden',
+                            border: '2px solid #8b5cf6', flexShrink: 0,
+                        }}>
+                            <img src={irisPhoto} alt="قزحية مسجّلة" style={{
+                                width: '100%', height: '100%', objectFit: 'cover',
+                                transform: 'scaleX(-1)',
+                            }} />
+                        </div>
+                        <div style={{ flex: 1 }}>
+                            <div style={{ fontSize: 13, fontWeight: 700, color: '#8b5cf6' }}>
+                                ✅ تم تسجيل القزحية
+                            </div>
+                            <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>
+                                يمكنك التحقق بقزحية العين عند دخول صفحة الحضور
+                            </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: 6 }}>
+                            <button
+                                onClick={handleOpenIrisCamera}
+                                style={{
+                                    padding: '8px', borderRadius: 'var(--radius-sm)',
+                                    background: 'rgba(139,92,246,0.1)', border: 'none',
+                                    color: '#8b5cf6', cursor: 'pointer',
+                                }}
+                                title="إعادة التسجيل"
+                            >
+                                <Eye size={16} />
+                            </button>
+                            <button
+                                onClick={handleRemoveIris}
+                                style={{
+                                    padding: '8px', borderRadius: 'var(--radius-sm)',
+                                    background: 'rgba(244,63,94,0.1)', border: 'none',
+                                    color: 'var(--accent-rose)', cursor: 'pointer',
+                                }}
+                                title="حذف"
+                            >
+                                <Trash2 size={16} />
+                            </button>
+                        </div>
+                    </div>
+                ) : !showIrisCamera && (
+                    <button
+                        onClick={handleOpenIrisCamera}
+                        style={{
+                            width: '100%', padding: '14px', borderRadius: 'var(--radius-md)',
+                            background: 'linear-gradient(135deg, rgba(139,92,246,0.1), rgba(168,85,247,0.08))',
+                            border: '2px dashed rgba(139,92,246,0.3)',
+                            color: '#8b5cf6', fontSize: 13, fontWeight: 700,
+                            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                        }}
+                    >
+                        <Eye size={18} />
+                        تسجيل قزحية جديدة
                     </button>
                 )}
             </div>

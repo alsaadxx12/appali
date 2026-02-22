@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useCallback } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
-import { AttendanceProvider } from './context/AttendanceContext';
+import { AttendanceProvider, useAttendance } from './context/AttendanceContext';
 import LoginPage from './pages/LoginPage';
 import ProfileCompletionPage from './pages/ProfileCompletionPage';
 import HomePage from './pages/HomePage';
@@ -12,11 +12,13 @@ import LeavePage from './pages/LeavePage';
 import NotificationInboxPage from './pages/NotificationInboxPage';
 import Header from './components/Header';
 import BottomNav from './components/BottomNav';
+import PullToRefresh from './components/PullToRefresh';
 import { PageType } from './types';
 
 function AppContent() {
     const { isAuthenticated, loading, isNewUser, markProfileComplete } = useAuth();
     const [currentPage, setCurrentPage] = useState<PageType>('home');
+    const [refreshKey, setRefreshKey] = useState(0);
 
     if (loading) {
         return (
@@ -47,6 +49,41 @@ function AppContent() {
         }} />;
     }
 
+    return (
+        <AttendanceProvider>
+            <AppInner
+                currentPage={currentPage}
+                setCurrentPage={setCurrentPage}
+                refreshKey={refreshKey}
+                setRefreshKey={setRefreshKey}
+            />
+        </AttendanceProvider>
+    );
+}
+
+function AppInner({
+    currentPage, setCurrentPage, refreshKey, setRefreshKey,
+}: {
+    currentPage: PageType;
+    setCurrentPage: (p: PageType) => void;
+    refreshKey: number;
+    setRefreshKey: (fn: (k: number) => number) => void;
+}) {
+    const { refreshRecords } = useAttendance();
+
+    const handleRefresh = useCallback(async () => {
+        await refreshRecords();
+    }, [refreshRecords]);
+
+    const handlePageChange = useCallback((page: PageType) => {
+        if (page === currentPage) {
+            setRefreshKey(k => k + 1);
+            refreshRecords();
+        } else {
+            setCurrentPage(page);
+        }
+    }, [currentPage, refreshRecords, setCurrentPage, setRefreshKey]);
+
     const renderPage = () => {
         switch (currentPage) {
             case 'home':
@@ -69,24 +106,26 @@ function AppContent() {
     };
 
     return (
-        <AttendanceProvider>
+        <>
             <div className="app-layout">
                 <div className="bg-pattern" />
                 <Header
                     onNavigateProfile={() => setCurrentPage('profile')}
                     onNavigateNotifications={() => setCurrentPage('notificationInbox')}
                 />
-                <div
-                    key={currentPage}
-                    style={{
-                        animation: 'pageIn 0.3s ease-out both',
-                        flex: 1,
-                        overflow: 'auto',
-                    }}
-                >
-                    {renderPage()}
-                </div>
-                <BottomNav currentPage={currentPage} onPageChange={setCurrentPage} />
+                <PullToRefresh onRefresh={handleRefresh}>
+                    <div
+                        key={`${currentPage}-${refreshKey}`}
+                        style={{
+                            animation: 'pageIn 0.3s ease-out both',
+                            flex: 1,
+                            overflow: 'auto',
+                        }}
+                    >
+                        {renderPage()}
+                    </div>
+                </PullToRefresh>
+                <BottomNav currentPage={currentPage} onPageChange={handlePageChange} />
             </div>
             <style>{`
                 @keyframes pageIn {
@@ -100,7 +139,7 @@ function AppContent() {
                     }
                 }
             `}</style>
-        </AttendanceProvider>
+        </>
     );
 }
 

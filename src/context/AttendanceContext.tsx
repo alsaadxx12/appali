@@ -14,6 +14,7 @@ interface AttendanceContextType {
     checkOut: (location?: GeoLocation) => void;
     getRecordsByMonth: (year: number, month: number) => AttendanceRecord[];
     getRecordByDate: (dateStr: string) => AttendanceRecord | undefined;
+    refreshRecords: () => Promise<void>;
     todayTotalHours: number;
     monthStats: {
         present: number;
@@ -30,27 +31,28 @@ export function AttendanceProvider({ children }: { children: ReactNode }) {
     const [records, setRecords] = useState<AttendanceRecord[]>([]);
 
     // Load records from Firestore
+    const loadRecords = async () => {
+        if (!user) return;
+        try {
+            const snap = await getDocs(
+                query(collection(db, 'attendance'), where('employeeId', '==', user.id))
+            );
+            const firestoreRecords = snap.docs.map(d => ({
+                ...d.data(),
+                id: d.id,
+            })) as AttendanceRecord[];
+            setRecords(firestoreRecords);
+        } catch (err) {
+            console.error('Error loading attendance records:', err);
+            const saved = localStorage.getItem(`attendance-${user.id}`);
+            if (saved) {
+                try { setRecords(JSON.parse(saved)); } catch { /* ignore */ }
+            }
+        }
+    };
+
     useEffect(() => {
         if (!user) return;
-        const loadRecords = async () => {
-            try {
-                const snap = await getDocs(
-                    query(collection(db, 'attendance'), where('employeeId', '==', user.id))
-                );
-                const firestoreRecords = snap.docs.map(d => ({
-                    ...d.data(),
-                    id: d.id,
-                })) as AttendanceRecord[];
-                setRecords(firestoreRecords);
-            } catch (err) {
-                console.error('Error loading attendance records:', err);
-                // Fallback to localStorage
-                const saved = localStorage.getItem(`attendance-${user.id}`);
-                if (saved) {
-                    try { setRecords(JSON.parse(saved)); } catch { /* ignore */ }
-                }
-            }
-        };
         loadRecords();
     }, [user?.id]);
 
@@ -166,6 +168,7 @@ export function AttendanceProvider({ children }: { children: ReactNode }) {
                 checkOut,
                 getRecordsByMonth,
                 getRecordByDate,
+                refreshRecords: loadRecords,
                 todayTotalHours,
                 monthStats,
             }}
