@@ -22,6 +22,7 @@ import {
     detectFace,
     drawFaceOverlay,
     FaceScanFrame,
+    ensureBiometricDataLoaded,
 } from '../utils/faceAuth';
 
 export default function HomePage() {
@@ -37,7 +38,6 @@ export default function HomePage() {
     const [biometricSettings, setBiometricSettings] = useState<BiometricSettings | null>(null);
     const [biometricError, setBiometricError] = useState('');
     const [biometricVerified, setBiometricVerified] = useState(false);
-    const [biometricLoading, setBiometricLoading] = useState(false);
     const [verifiedAt, setVerifiedAt] = useState<number | null>(null);
     // Face verification
     const [faceMode, setFaceMode] = useState(false);
@@ -50,6 +50,7 @@ export default function HomePage() {
     const streamRef = useRef<MediaStream | null>(null);
     const scanIntervalRef = useRef<any>(null);
     const framesRef = useRef<FaceScanFrame[]>([]);
+    const [hasFace, setHasFace] = useState(false);
 
     const SESSION_TIMEOUT = 30 * 60 * 1000; // 30 minutes
 
@@ -88,11 +89,16 @@ export default function HomePage() {
         loadBranch();
     }, [user?.branch]);
 
-    // Load biometric settings
+    // Load biometric settings & sync Firestore data
     useEffect(() => {
         const loadAndCheck = async () => {
             const settings = await getBiometricSettings();
             setBiometricSettings(settings);
+            // Preload biometric data from Firestore into localStorage
+            if (user?.id) {
+                await ensureBiometricDataLoaded(user.id);
+                setHasFace(isFaceRegistered(user.id));
+            }
         };
         loadAndCheck();
     }, [user?.id]);
@@ -303,7 +309,7 @@ export default function HomePage() {
 
     // Show verification gate if biometric is enabled and not verified
     const needsVerification = biometricSettings?.enabled && !biometricVerified;
-    const hasFace = user?.id ? isFaceRegistered(user.id) : false;
+
 
     if (needsVerification) {
         return (

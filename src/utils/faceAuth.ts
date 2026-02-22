@@ -301,11 +301,28 @@ export async function verifyFaceAdvanced(
     collectedFrames: FaceScanFrame[]
 ): Promise<FaceVerifyResult> {
     try {
+        // Try localStorage first, then Firestore
+        let storedDescriptor: Float32Array | null = null;
         const storedStr = localStorage.getItem(FACE_KEY + userId);
-        if (!storedStr) return { success: false, error: 'لم يتم تسجيل وجه' };
-
-        const stored = JSON.parse(storedStr);
-        const storedDescriptor = new Float32Array(stored.descriptor);
+        if (storedStr) {
+            const stored = JSON.parse(storedStr);
+            storedDescriptor = new Float32Array(stored.descriptor);
+        } else {
+            // Load from Firestore and cache locally
+            const firestoreData = await loadBiometricFromFirestore(userId, 'face');
+            if (firestoreData?.descriptor) {
+                storedDescriptor = new Float32Array(firestoreData.descriptor);
+                // Cache in localStorage for future use
+                localStorage.setItem(FACE_KEY + userId, JSON.stringify({
+                    descriptor: firestoreData.descriptor,
+                    photo: firestoreData.photoURL || firestoreData.photo || '',
+                    registeredAt: firestoreData.registeredAt,
+                    frameCount: firestoreData.frameCount,
+                }));
+                console.log('✅ Face data loaded from Firestore and cached locally');
+            }
+        }
+        if (!storedDescriptor) return { success: false, error: 'لم يتم تسجيل وجه' };
 
         const loaded = await loadFaceModels();
         if (!loaded) return { success: false, error: 'فشل تحميل النماذج' };
@@ -325,8 +342,8 @@ export async function verifyFaceAdvanced(
         const livenessScore = calculateLivenessScore(collectedFrames);
 
         // Decision thresholds
-        const matchThreshold = 0.55; // Stricter matching
-        const livenessThreshold = 25;  // Minimum liveness
+        const matchThreshold = 0.55;
+        const livenessThreshold = 25;
         const minFrames = 4;
 
         if (distance > matchThreshold) {
@@ -353,10 +370,24 @@ export async function verifyFace(
     userId: string,
     video: HTMLVideoElement
 ): Promise<{ success: boolean; error?: string; distance?: number }> {
+    // Try localStorage first, then Firestore
+    let storedDesc: Float32Array | null = null;
     const stored = localStorage.getItem(FACE_KEY + userId);
-    if (!stored) return { success: false, error: 'لم يتم تسجيل وجه' };
-    const data = JSON.parse(stored);
-    const storedDesc = new Float32Array(data.descriptor);
+    if (stored) {
+        storedDesc = new Float32Array(JSON.parse(stored).descriptor);
+    } else {
+        const fsData = await loadBiometricFromFirestore(userId, 'face');
+        if (fsData?.descriptor) {
+            storedDesc = new Float32Array(fsData.descriptor);
+            localStorage.setItem(FACE_KEY + userId, JSON.stringify({
+                descriptor: fsData.descriptor,
+                photo: fsData.photoURL || '',
+                registeredAt: fsData.registeredAt,
+                frameCount: fsData.frameCount,
+            }));
+        }
+    }
+    if (!storedDesc) return { success: false, error: 'لم يتم تسجيل وجه' };
 
     const frame = await detectFace(video);
     if (!frame) return { success: false, error: 'لم يتم اكتشاف وجه' };
@@ -367,11 +398,28 @@ export async function verifyFace(
 }
 
 // ============================================================
-// Helpers
+// Helpers — all Firestore-first with localStorage cache
 // ============================================================
 
+// Synchronous check (uses localStorage cache — call ensureBiometricDataLoaded first)
 export function isFaceRegistered(userId: string): boolean {
     return !!localStorage.getItem(FACE_KEY + userId);
+}
+
+// Async check — queries Firestore if not in localStorage
+export async function isFaceRegisteredAsync(userId: string): Promise<boolean> {
+    if (localStorage.getItem(FACE_KEY + userId)) return true;
+    const fsData = await loadBiometricFromFirestore(userId, 'face');
+    if (fsData?.descriptor) {
+        localStorage.setItem(FACE_KEY + userId, JSON.stringify({
+            descriptor: fsData.descriptor,
+            photo: fsData.photoURL || '',
+            registeredAt: fsData.registeredAt,
+            frameCount: fsData.frameCount,
+        }));
+        return true;
+    }
+    return false;
 }
 
 export function getFacePhoto(userId: string): string | null {
@@ -605,13 +653,39 @@ export async function verifyIris(
     video: HTMLVideoElement
 ): Promise<{ success: boolean; error?: string; confidence?: number }> {
     try {
-        const storedStr = localStorage.getItem(IRIS_KEY + userId);
-        if (!storedStr) return { success: false, error: 'لم يتم تسجيل قزحية العين' };
+        // Try localStorage first, then Firestore
+        let storedLeft: Float32Array | null = null;
+        let storedRight: Float32Array | null = null;
+        let storedDesc: Float32Array | null = null;
 
-        const stored = JSON.parse(storedStr);
-        const storedLeft = new Float32Array(stored.leftEye);
-        const storedRight = new Float32Array(stored.rightEye);
-        const storedDesc = new Float32Array(stored.faceDescriptor);
+        const storedStr = localStorage.getItem(IRIS_KEY + userId);
+        if (storedStr) {
+            const stored = JSON.parse(storedStr);
+            storedLeft = new Float32Array(stored.leftEye);
+            storedRight = new Float32Array(stored.rightEye);
+            storedDesc = new Float32Array(stored.faceDescriptor);
+        } else {
+            // Load from Firestore and cache
+            const fsData = await loadBiometricFromFirestore(userId, 'iris');
+            if (fsData?.leftEye && fsData?.rightEye && fsData?.faceDescriptor) {
+                storedLeft = new Float32Array(fsData.leftEye);
+                storedRight = new Float32Array(fsData.rightEye);
+                storedDesc = new Float32Array(fsData.faceDescriptor);
+                localStorage.setItem(IRIS_KEY + userId, JSON.stringify({
+                    leftEye: fsData.leftEye,
+                    rightEye: fsData.rightEye,
+                    faceDescriptor: fsData.faceDescriptor,
+                    photo: fsData.photoURL || '',
+                    registeredAt: fsData.registeredAt,
+                    frameCount: fsData.frameCount,
+                }));
+                console.log('✅ Iris data loaded from Firestore and cached locally');
+            }
+        }
+
+        if (!storedLeft || !storedRight || !storedDesc) {
+            return { success: false, error: 'لم يتم تسجيل قزحية العين' };
+        }
 
         const loaded = await loadFaceModels();
         if (!loaded) return { success: false, error: 'فشل تحميل النماذج' };
@@ -655,6 +729,23 @@ export async function verifyIris(
 
 export function isIrisRegistered(userId: string): boolean {
     return !!localStorage.getItem(IRIS_KEY + userId);
+}
+
+export async function isIrisRegisteredAsync(userId: string): Promise<boolean> {
+    if (localStorage.getItem(IRIS_KEY + userId)) return true;
+    const fsData = await loadBiometricFromFirestore(userId, 'iris');
+    if (fsData?.leftEye) {
+        localStorage.setItem(IRIS_KEY + userId, JSON.stringify({
+            leftEye: fsData.leftEye,
+            rightEye: fsData.rightEye,
+            faceDescriptor: fsData.faceDescriptor,
+            photo: fsData.photoURL || '',
+            registeredAt: fsData.registeredAt,
+            frameCount: fsData.frameCount,
+        }));
+        return true;
+    }
+    return false;
 }
 
 export function getIrisPhoto(userId: string): string | null {
@@ -704,4 +795,57 @@ export async function checkBothBiometricsRegistered(userId: string): Promise<boo
         isBiometricRegisteredInFirestore(userId, 'iris'),
     ]);
     return face && iris;
+}
+
+/**
+ * Call on app start / login to preload biometric data from Firestore into localStorage.
+ * This ensures isFaceRegistered() / isIrisRegistered() work synchronously on any device.
+ */
+export async function ensureBiometricDataLoaded(userId: string): Promise<void> {
+    try {
+        const [faceLocal, irisLocal] = [
+            localStorage.getItem(FACE_KEY + userId),
+            localStorage.getItem(IRIS_KEY + userId),
+        ];
+
+        const promises: Promise<void>[] = [];
+
+        if (!faceLocal) {
+            promises.push(
+                loadBiometricFromFirestore(userId, 'face').then(fsData => {
+                    if (fsData?.descriptor) {
+                        localStorage.setItem(FACE_KEY + userId, JSON.stringify({
+                            descriptor: fsData.descriptor,
+                            photo: fsData.photoURL || fsData.photo || '',
+                            registeredAt: fsData.registeredAt,
+                            frameCount: fsData.frameCount,
+                        }));
+                        console.log('✅ Face data synced from Firestore to localStorage');
+                    }
+                })
+            );
+        }
+
+        if (!irisLocal) {
+            promises.push(
+                loadBiometricFromFirestore(userId, 'iris').then(fsData => {
+                    if (fsData?.leftEye) {
+                        localStorage.setItem(IRIS_KEY + userId, JSON.stringify({
+                            leftEye: fsData.leftEye,
+                            rightEye: fsData.rightEye,
+                            faceDescriptor: fsData.faceDescriptor,
+                            photo: fsData.photoURL || fsData.photo || '',
+                            registeredAt: fsData.registeredAt,
+                            frameCount: fsData.frameCount,
+                        }));
+                        console.log('✅ Iris data synced from Firestore to localStorage');
+                    }
+                })
+            );
+        }
+
+        if (promises.length > 0) await Promise.all(promises);
+    } catch (e) {
+        console.error('Error syncing biometric data from Firestore:', e);
+    }
 }
