@@ -1,16 +1,16 @@
 import React, { useState, useEffect } from 'react';
-import { Bell } from 'lucide-react';
+import { Bell, MessageCircle } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { AVATAR_COLORS } from '../data/demoData';
 import { db } from '../firebase';
 import { collection, getDocs, query, where } from 'firebase/firestore';
 
 interface HeaderProps {
     onNavigateProfile?: () => void;
     onNavigateNotifications?: () => void;
+    onNavigateChat?: () => void;
 }
 
-export default function Header({ onNavigateProfile, onNavigateNotifications }: HeaderProps) {
+export default function Header({ onNavigateProfile, onNavigateNotifications, onNavigateChat }: HeaderProps) {
     const { user } = useAuth();
     const [unreadCount, setUnreadCount] = useState(0);
 
@@ -33,41 +33,35 @@ export default function Header({ onNavigateProfile, onNavigateNotifications }: H
 
     if (!user) return null;
 
-    const userIndex = user.id.split('').reduce((a: number, c: string) => a + c.charCodeAt(0), 0);
-    const avatarColor = AVATAR_COLORS[userIndex % AVATAR_COLORS.length];
-    const initials = user.name.split(' ').map((w: string) => w[0]).join('').slice(0, 2);
-
     return (
-        <header className="app-header" style={{ justifyContent: 'space-between', padding: '10px 16px' }}>
-            {/* Right side (RTL) - User avatar */}
-            <div
-                onClick={onNavigateProfile}
+        <header className="app-header" style={{
+            justifyContent: 'flex-end',
+            padding: '14px 18px',
+            paddingTop: 'calc(32px + var(--safe-top))',
+            gap: 10,
+            minHeight: 56,
+        }}>
+            {/* Chat button */}
+            <button
+                onClick={onNavigateChat}
                 style={{
-                    display: 'flex', alignItems: 'center', gap: 10,
-                    cursor: onNavigateProfile ? 'pointer' : 'default',
+                    width: 42, height: 42, borderRadius: 'var(--radius-full)',
+                    background: 'var(--bg-glass)',
+                    border: '1px solid var(--border-glass)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    color: 'var(--text-secondary)',
+                    cursor: 'pointer',
+                    transition: 'all 0.2s ease',
                 }}
             >
-                <div style={{
-                    width: 36, height: 36, borderRadius: 'var(--radius-full)',
-                    background: `linear-gradient(135deg, ${avatarColor}, ${avatarColor}cc)`,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    color: 'white', fontSize: 13, fontWeight: 800,
-                    border: '2px solid rgba(255,255,255,0.15)',
-                    boxShadow: `0 2px 8px ${avatarColor}40`,
-                }}>
-                    {initials}
-                </div>
-                <div style={{ textAlign: 'right' }}>
-                    <div style={{ fontSize: 13, fontWeight: 800, lineHeight: 1.2 }}>{user.name}</div>
-                    <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{user.department}</div>
-                </div>
-            </div>
+                <MessageCircle size={19} />
+            </button>
 
-            {/* Left side (RTL) - Notification bell */}
+            {/* Notification bell */}
             <button
                 onClick={onNavigateNotifications}
                 style={{
-                    width: 40, height: 40, borderRadius: 'var(--radius-full)',
+                    width: 42, height: 42, borderRadius: 'var(--radius-full)',
                     background: 'var(--bg-glass)',
                     border: '1px solid var(--border-glass)',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -76,7 +70,7 @@ export default function Header({ onNavigateProfile, onNavigateNotifications }: H
                     transition: 'all 0.2s ease',
                 }}
             >
-                <Bell size={18} />
+                <Bell size={19} />
                 {unreadCount > 0 && (
                     <div style={{
                         position: 'absolute', top: 6, right: 6,

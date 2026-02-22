@@ -58,7 +58,7 @@ export interface Branch {
 }
 
 // === Page Types ===
-export type PageType = 'home' | 'history' | 'vip' | 'profile' | 'salary' | 'leaves' | 'notificationInbox';
+export type PageType = 'home' | 'history' | 'vip' | 'profile' | 'salary' | 'leaves' | 'notificationInbox' | 'chat';
 
 // === Calendar Day ===
 export interface CalendarDay {

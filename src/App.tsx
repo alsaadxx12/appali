@@ -12,6 +12,7 @@ import ProfilePage from './pages/ProfilePage';
 import SalaryPage from './pages/SalaryPage';
 import LeavePage from './pages/LeavePage';
 import NotificationInboxPage from './pages/NotificationInboxPage';
+import ChatPage from './pages/ChatPage';
 import Header from './components/Header';
 import BottomNav from './components/BottomNav';
 import PullToRefresh from './components/PullToRefresh';
@@ -110,6 +111,8 @@ function AppInner({
                 return <LeavePage />;
             case 'notificationInbox':
                 return <NotificationInboxPage onBack={() => setCurrentPage('home')} />;
+            case 'chat':
+                return <ChatPage onBack={() => setCurrentPage('home')} />;
             default:
                 return <HomePage />;
         }
@@ -122,6 +125,7 @@ function AppInner({
                 <Header
                     onNavigateProfile={() => setCurrentPage('profile')}
                     onNavigateNotifications={() => setCurrentPage('notificationInbox')}
+                    onNavigateChat={() => setCurrentPage('chat')}
                 />
                 <PullToRefresh onRefresh={handleRefresh}>
                     <div
