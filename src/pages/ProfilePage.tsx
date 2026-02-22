@@ -172,8 +172,9 @@ export default function ProfilePage({ initialSubPage, onSubPageChange }: Profile
                 id: 'biometric',
                 icon: <Fingerprint size={20} />,
                 label: 'إعدادات البيومتري',
-                description: 'بصمة الإصبع والتعرف على الوجه',
+                description: 'فرض أو إلغاء المصادقة البيومترية للموظفين',
                 color: 'var(--accent-teal, #14b8a6)',
+                adminOnly: true,
             },
             {
                 id: 'admin',

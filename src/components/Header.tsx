@@ -45,32 +45,32 @@ export default function Header({ onNavigateProfile, onNavigateNotifications, onN
             <button
                 onClick={onNavigateChat}
                 style={{
-                    width: 42, height: 42, borderRadius: 'var(--radius-full)',
-                    background: 'var(--bg-glass)',
-                    border: '1px solid var(--border-glass)',
+                    width: 38, height: 38, borderRadius: 'var(--radius-full)',
+                    background: 'linear-gradient(135deg, rgba(59,130,246,0.15), rgba(139,92,246,0.15))',
+                    border: '1px solid rgba(99,102,241,0.2)',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    color: 'var(--text-secondary)',
+                    color: '#818cf8',
                     cursor: 'pointer',
                     transition: 'all 0.2s ease',
                 }}
             >
-                <MessageCircle size={19} />
+                <MessageCircle size={18} />
             </button>
 
             {/* Notification bell */}
             <button
                 onClick={onNavigateNotifications}
                 style={{
-                    width: 42, height: 42, borderRadius: 'var(--radius-full)',
-                    background: 'var(--bg-glass)',
-                    border: '1px solid var(--border-glass)',
+                    width: 38, height: 38, borderRadius: 'var(--radius-full)',
+                    background: 'linear-gradient(135deg, rgba(245,158,11,0.15), rgba(251,191,36,0.12))',
+                    border: '1px solid rgba(245,158,11,0.2)',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    color: 'var(--text-secondary)',
+                    color: '#fbbf24',
                     position: 'relative', cursor: 'pointer',
                     transition: 'all 0.2s ease',
                 }}
             >
-                <Bell size={19} />
+                <Bell size={18} />
                 {unreadCount > 0 && (
                     <div style={{
                         position: 'absolute', top: 6, right: 6,
