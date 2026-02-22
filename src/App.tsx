@@ -54,8 +54,8 @@ function AppContent() {
     }
 
     if (needsBiometric) {
-        return <BiometricRegistrationPage onComplete={() => {
-            markBiometricComplete();
+        return <BiometricRegistrationPage onComplete={async () => {
+            await markBiometricComplete();
             setCurrentPage('home');
         }} />;
     }

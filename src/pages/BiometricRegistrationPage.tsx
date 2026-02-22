@@ -109,6 +109,21 @@ export default function BiometricRegistrationPage({ onComplete }: Props) {
         }
     };
 
+    const handleDone = async () => {
+        // Double-check Firestore has both biometric docs before proceeding
+        const [faceOk, irisOk] = await Promise.all([
+            isBiometricRegisteredInFirestore(userId, 'face'),
+            isBiometricRegisteredInFirestore(userId, 'iris'),
+        ]);
+        if (!faceOk || !irisOk) {
+            setMessage({ type: 'error', text: 'تعذر التحقق من البيانات في قاعدة البيانات، حاول مرة أخرى' });
+            if (!faceOk) { setFaceRegistered(false); setStep('face'); }
+            else if (!irisOk) { setIrisRegistered(false); setStep('iris'); }
+            return;
+        }
+        onComplete();
+    };
+
     const pageStyle: React.CSSProperties = {
         minHeight: '100vh',
         minWidth: '100vw',
@@ -348,7 +363,7 @@ export default function BiometricRegistrationPage({ onComplete }: Props) {
                     </div>
 
                     <button
-                        onClick={onComplete}
+                        onClick={handleDone}
                         style={{
                             width: '100%', padding: '16px',
                             borderRadius: 14,

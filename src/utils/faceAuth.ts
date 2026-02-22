@@ -265,12 +265,18 @@ export async function registerFace(
             frameCount: descriptors.length,
         }));
 
-        // Upload photo to Firebase Storage & save data to Firestore
+        // Upload photo to Firebase Storage (optional — fallback to base64)
+        let photoURL = photo; // fallback: use base64 directly
         try {
             console.log('💾 Uploading face photo to Storage for user:', userId);
-            const photoURL = await uploadPhotoToStorage(userId, 'face', photo);
+            photoURL = await uploadPhotoToStorage(userId, 'face', photo);
             console.log('✅ Face photo uploaded to Storage');
+        } catch (e: any) {
+            console.warn('⚠️ Photo upload failed, using base64 fallback:', e?.message || e);
+        }
 
+        // Save descriptor to Firestore — this MUST succeed
+        try {
             await setDoc(doc(db, 'users', userId, 'biometrics', 'face'), {
                 descriptor: Array.from(avgDescriptor),
                 photoURL,
@@ -280,7 +286,8 @@ export async function registerFace(
             });
             console.log('✅ Face data saved to Firestore successfully');
         } catch (e: any) {
-            console.error('❌ Failed to save face to Storage/Firestore:', e?.message || e);
+            console.error('❌ Failed to save face to Firestore:', e?.message || e);
+            return { success: false, error: 'فشل حفظ بيانات الوجه في قاعدة البيانات' };
         }
 
         onProgress?.('تم!', 100);
@@ -620,12 +627,18 @@ export async function registerIris(
             frameCount: allLeftSigs.length,
         }));
 
-        // Upload photo to Firebase Storage & save data to Firestore
+        // Upload photo to Firebase Storage (optional — fallback to base64)
+        let photoURL = photo;
         try {
             console.log('💾 Uploading iris photo to Storage for user:', userId);
-            const photoURL = await uploadPhotoToStorage(userId, 'iris', photo);
+            photoURL = await uploadPhotoToStorage(userId, 'iris', photo);
             console.log('✅ Iris photo uploaded to Storage');
+        } catch (e: any) {
+            console.warn('⚠️ Iris photo upload failed, using base64 fallback:', e?.message || e);
+        }
 
+        // Save data to Firestore — this MUST succeed
+        try {
             await setDoc(doc(db, 'users', userId, 'biometrics', 'iris'), {
                 leftEye: Array.from(avgLeft),
                 rightEye: Array.from(avgRight),
@@ -637,7 +650,8 @@ export async function registerIris(
             });
             console.log('✅ Iris data saved to Firestore successfully');
         } catch (e: any) {
-            console.error('❌ Failed to save iris to Storage/Firestore:', e?.message || e);
+            console.error('❌ Failed to save iris to Firestore:', e?.message || e);
+            return { success: false, error: 'فشل حفظ بيانات القزحية في قاعدة البيانات' };
         }
 
         onProgress?.('تم التسجيل!', 100);
