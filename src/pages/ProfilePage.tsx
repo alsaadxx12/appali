@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import {
     User, Building2, Clock, Star, Bell, LogOut,
-    ChevronLeft, Shield, Info, Users, Crown, Image as ImageIcon, MapPin, Timer, Calendar, DollarSign, Fingerprint
+    ChevronLeft, Shield, Info, Users, Crown, Image as ImageIcon, MapPin, Timer, Calendar, DollarSign, Fingerprint,
+    Sun, Moon
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { useTheme } from '../context/ThemeContext';
 import { AVATAR_COLORS } from '../data/demoData';
 import VipFrame, { getVipLevel, getVipLabel, getVipColor } from '../components/VipFrame';
 import BranchesPage from './profile/BranchesPage';
@@ -40,6 +42,7 @@ interface ProfilePageProps {
 
 export default function ProfilePage({ initialSubPage, onSubPageChange }: ProfilePageProps) {
     const { user, logout } = useAuth();
+    const { theme, toggleTheme, isDark } = useTheme();
     const [subPage, setSubPage] = useState<SubPage>(initialSubPage || 'main');
     const [vipLevels, setVipLevels] = useState<VipLevelData[]>([]);
     const [defaultLevel, setDefaultLevel] = useState<string>('none');
@@ -391,6 +394,56 @@ export default function ProfilePage({ initialSubPage, onSubPageChange }: Profile
                     </div>
                 </div>
             </div>
+
+            {/* Theme Toggle */}
+            <button
+                onClick={toggleTheme}
+                className="glass-card"
+                style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 12,
+                    padding: '14px 16px',
+                    width: '100%',
+                    textAlign: 'right',
+                    cursor: 'pointer',
+                    marginBottom: 12,
+                    border: '1px solid var(--border-glass)',
+                    transition: 'all 200ms ease',
+                }}
+            >
+                <div style={{
+                    width: 42, height: 42, borderRadius: 'var(--radius-md)',
+                    background: isDark ? 'rgba(245,158,11,0.12)' : 'rgba(99,102,241,0.12)',
+                    color: isDark ? '#f59e0b' : '#6366f1',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                    transition: 'all 300ms ease',
+                }}>
+                    {isDark ? <Sun size={20} /> : <Moon size={20} />}
+                </div>
+                <div style={{ flex: 1 }}>
+                    <div style={{ fontSize: 14, fontWeight: 700, marginBottom: 2 }}>
+                        {isDark ? 'الوضع النهاري' : 'الوضع الليلي'}
+                    </div>
+                    <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
+                        {isDark ? 'التبديل إلى الوضع الفاتح' : 'التبديل إلى الوضع الداكن'}
+                    </div>
+                </div>
+                <div style={{
+                    width: 44, height: 24, borderRadius: 12,
+                    background: isDark ? 'rgba(255,255,255,0.1)' : 'rgba(99,102,241,0.2)',
+                    position: 'relative', transition: 'background 300ms ease',
+                }}>
+                    <div style={{
+                        width: 20, height: 20, borderRadius: '50%',
+                        background: isDark ? '#f59e0b' : '#6366f1',
+                        position: 'absolute', top: 2,
+                        right: isDark ? 22 : 2,
+                        transition: 'all 300ms ease',
+                        boxShadow: '0 2px 6px rgba(0,0,0,0.2)',
+                    }} />
+                </div>
+            </button>
 
             {/* Logout */}
             <button

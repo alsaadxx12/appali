@@ -1,5 +1,6 @@
 import React, { useState, useCallback } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
+import { ThemeProvider } from './context/ThemeContext';
 import { AttendanceProvider, useAttendance } from './context/AttendanceContext';
 import LoginPage from './pages/LoginPage';
 import ProfileCompletionPage from './pages/ProfileCompletionPage';
@@ -145,8 +146,10 @@ function AppInner({
 
 export default function App() {
     return (
-        <AuthProvider>
-            <AppContent />
-        </AuthProvider>
+        <ThemeProvider>
+            <AuthProvider>
+                <AppContent />
+            </AuthProvider>
+        </ThemeProvider>
     );
 }
