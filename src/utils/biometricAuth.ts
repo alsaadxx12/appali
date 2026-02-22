@@ -20,6 +20,7 @@ export interface BiometricSettings {
 interface StoredCredential {
     credentialId: string;
     registeredAt: string;
+    domain: string;
 }
 
 const SETTINGS_DOC = 'biometric';
@@ -44,10 +45,20 @@ function base64ToBuffer(base64: string): ArrayBuffer {
 }
 
 // ============================================================
+// Check if running on HTTPS
+// ============================================================
+
+function isSecureContext(): boolean {
+    return window.isSecureContext === true;
+}
+
+// ============================================================
 // Availability Check
 // ============================================================
 
 export async function isBiometricAvailable(): Promise<boolean> {
+    // Must be secure context (HTTPS or localhost)
+    if (!isSecureContext()) return false;
     if (!window.PublicKeyCredential) return false;
     try {
         return await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
@@ -57,7 +68,7 @@ export async function isBiometricAvailable(): Promise<boolean> {
 }
 
 // ============================================================
-// Register (auto-called on first verification)
+// Register credential (auto-called on first verification)
 // ============================================================
 
 async function registerCredential(userId: string): Promise<{ success: boolean; error?: string }> {
@@ -68,11 +79,14 @@ async function registerCredential(userId: string): Promise<{ success: boolean; e
         const credential = await navigator.credentials.create({
             publicKey: {
                 challenge,
-                rp: { name: 'نظام الحضور', id: window.location.hostname },
+                rp: {
+                    name: 'Attendance System',
+                    // Let browser auto-detect the rpId from current origin
+                },
                 user: {
                     id: new TextEncoder().encode(userId),
                     name: userId,
-                    displayName: userId,
+                    displayName: 'User',
                 },
                 pubKeyCredParams: [
                     { alg: -7, type: 'public-key' },
@@ -90,43 +104,60 @@ async function registerCredential(userId: string): Promise<{ success: boolean; e
 
         if (!credential) return { success: false, error: 'فشل التسجيل' };
 
+        // Store credential with current domain
         localStorage.setItem(CRED_PREFIX + userId, JSON.stringify({
             credentialId: bufferToBase64(credential.rawId),
             registeredAt: new Date().toISOString(),
+            domain: window.location.hostname,
         }));
 
         return { success: true };
     } catch (err: any) {
+        console.error('WebAuthn register error:', err.name, err.message);
         if (err.name === 'NotAllowedError') return { success: false, error: 'تم إلغاء المصادقة' };
-        if (err.name === 'SecurityError') return { success: false, error: 'يتطلب اتصال HTTPS آمن' };
+        if (err.name === 'SecurityError') return { success: false, error: 'خطأ أمني - جرب إعادة فتح الصفحة' };
         return { success: false, error: err.message || 'فشل التسجيل' };
     }
 }
 
 // ============================================================
-// Verify - triggers device native auth (Face ID / fingerprint / passcode)
-// Auto-registers on first use
+// Verify - triggers device native auth
+// Auto-registers on first use or when domain changes
 // ============================================================
 
 export async function verifyBiometric(userId: string): Promise<{ success: boolean; error?: string }> {
     try {
+        // Check secure context first
+        if (!isSecureContext()) {
+            return { success: false, error: 'يتطلب اتصال HTTPS آمن' };
+        }
+
         // Check if WebAuthn is available
         const available = await isBiometricAvailable();
         if (!available) {
-            return { success: false, error: 'المصادقة البيومترية غير متاحة. تأكد من استخدام HTTPS' };
+            return { success: false, error: 'جهازك لا يدعم المصادقة البيومترية' };
         }
 
         const storedStr = localStorage.getItem(CRED_PREFIX + userId);
+        let stored: StoredCredential | null = null;
+
+        if (storedStr) {
+            stored = JSON.parse(storedStr);
+            // If domain changed (e.g. moved from localhost to netlify), re-register
+            if (stored && stored.domain !== window.location.hostname) {
+                localStorage.removeItem(CRED_PREFIX + userId);
+                stored = null;
+            }
+        }
 
         // Auto-register on first use
-        if (!storedStr) {
+        if (!stored) {
             const reg = await registerCredential(userId);
             if (!reg.success) return reg;
             return { success: true }; // Registration itself verified identity
         }
 
         // Verify with existing credential
-        const stored: StoredCredential = JSON.parse(storedStr);
         const credentialId = base64ToBuffer(stored.credentialId);
         const challenge = new Uint8Array(32);
         crypto.getRandomValues(challenge);
@@ -134,7 +165,7 @@ export async function verifyBiometric(userId: string): Promise<{ success: boolea
         const assertion = await navigator.credentials.get({
             publicKey: {
                 challenge,
-                rpId: window.location.hostname,
+                // Don't set rpId - let browser use the default from the origin
                 allowCredentials: [{
                     id: credentialId,
                     type: 'public-key',
@@ -148,11 +179,12 @@ export async function verifyBiometric(userId: string): Promise<{ success: boolea
         if (!assertion) return { success: false, error: 'فشل التحقق من الهوية' };
         return { success: true };
     } catch (err: any) {
+        console.error('WebAuthn verify error:', err.name, err.message);
         if (err.name === 'NotAllowedError') {
             return { success: false, error: 'تم إلغاء المصادقة أو انتهت المهلة' };
         }
-        if (err.name === 'InvalidStateError') {
-            // Credential is stale, remove and retry
+        if (err.name === 'InvalidStateError' || err.name === 'SecurityError') {
+            // Credential is stale or domain mismatch, remove and retry
             localStorage.removeItem(CRED_PREFIX + userId);
             return verifyBiometric(userId);
         }
