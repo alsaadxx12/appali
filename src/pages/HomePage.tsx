@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Clock, MapPin, Timer, AlertTriangle, CheckCircle, Coffee, RefreshCw, Lock, ShieldAlert, Fingerprint, Camera, Scan, Shield, ShieldCheck, Eye } from 'lucide-react';
+import { Clock, MapPin, Timer, AlertTriangle, CheckCircle, Coffee, RefreshCw, Lock, ShieldAlert, Camera, Scan, Shield, ShieldCheck, Eye } from 'lucide-react';
 import AttendanceButton from '../components/AttendanceButton';
 import StatusCard from '../components/StatusCard';
 import { useAttendance } from '../context/AttendanceContext';
@@ -10,7 +10,6 @@ import { GeoLocation, Branch } from '../types';
 import { db } from '../firebase';
 import { collection, getDocs, query, where } from 'firebase/firestore';
 import {
-    verifyBiometric,
     getBiometricSettings,
     BiometricSettings,
 } from '../utils/biometricAuth';
@@ -157,21 +156,7 @@ export default function HomePage() {
         }
     };
 
-    const handleBiometricVerify = async () => {
-        if (!user?.id) return;
-        setBiometricLoading(true);
-        setBiometricError('');
-        const result = await verifyBiometric(user.id);
-        setBiometricLoading(false);
-        if (result.success) {
-            setBiometricVerified(true);
-            setVerifiedAt(Date.now());
-            setFaceMode(false);
-            cleanupCamera();
-        } else {
-            setBiometricError(result.error || 'فشل التحقق من الهوية');
-        }
-    };
+
 
     const cleanupCamera = useCallback(() => {
         if (scanIntervalRef.current) { clearInterval(scanIntervalRef.current); scanIntervalRef.current = null; }
@@ -196,7 +181,7 @@ export default function HomePage() {
             return;
         }
 
-        await new Promise(r => setTimeout(r, 400));
+        await new Promise(r => setTimeout(r, 200));
         if (!videoRef.current) return;
         const stream = await startCamera(videoRef.current);
         if (!stream) {
@@ -259,14 +244,14 @@ export default function HomePage() {
                 setScanMessage('لم يتم اكتشاف وجه...');
             }
 
-            if (attempts >= 20) { // 30 seconds
+            if (attempts >= 35) { // ~28 seconds
                 setFaceStatus('fail');
                 setScanMessage('انتهت المهلة');
                 setBiometricError('لم يتم التعرف على الوجه. حاول مرة أخرى.');
                 cleanupCamera();
                 if (scanIntervalRef.current) clearInterval(scanIntervalRef.current);
             }
-        }, 1500);
+        }, 800);
     };
 
     const handleAttendancePress = async () => {
@@ -329,99 +314,181 @@ export default function HomePage() {
                 {/* Face Camera Mode */}
                 {faceMode ? (
                     <div style={{ width: '100%', maxWidth: 380, textAlign: 'center' }}>
-                        {/* Camera Container with Canvas Overlay */}
+                        {/* Camera Container */}
                         <div style={{
                             position: 'relative', width: '100%', aspectRatio: '3/4',
-                            borderRadius: 'var(--radius-lg)', overflow: 'hidden',
-                            border: `3px solid ${faceStatus === 'success' ? 'var(--accent-emerald)'
-                                : faceStatus === 'fail' ? 'var(--accent-rose)'
-                                    : 'var(--accent-blue)'}`,
-                            background: '#000', marginBottom: 12,
+                            borderRadius: 20, overflow: 'hidden',
+                            border: `2px solid ${faceStatus === 'success' ? '#10b981'
+                                : faceStatus === 'fail' ? '#f43f5e'
+                                    : 'rgba(99,102,241,0.4)'}`,
+                            background: '#000', marginBottom: 14,
+                            boxShadow: faceStatus === 'success'
+                                ? '0 0 40px rgba(16,185,129,0.3)'
+                                : faceStatus === 'scanning'
+                                    ? '0 0 30px rgba(99,102,241,0.2)'
+                                    : 'none',
+                            transition: 'all 0.5s ease',
                         }}>
                             <video ref={videoRef} autoPlay playsInline muted style={{
                                 width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)',
                             }} />
-                            {/* Face overlay canvas — draws bounding box + 68 landmarks */}
                             <canvas ref={canvasRef} style={{
                                 position: 'absolute', inset: 0, width: '100%', height: '100%',
                                 transform: 'scaleX(-1)', pointerEvents: 'none',
                             }} />
 
-                            {/* Top HUD — confidence + liveness */}
+                            {/* Scanning corner markers */}
+                            {faceStatus === 'scanning' && (
+                                <>
+                                    {['top-right', 'top-left', 'bottom-right', 'bottom-left'].map(pos => (
+                                        <div key={pos} style={{
+                                            position: 'absolute',
+                                            [pos.includes('top') ? 'top' : 'bottom']: 14,
+                                            [pos.includes('right') ? 'right' : 'left']: 14,
+                                            width: 28, height: 28,
+                                            borderTop: pos.includes('top') ? '2.5px solid rgba(99,102,241,0.6)' : 'none',
+                                            borderBottom: pos.includes('bottom') ? '2.5px solid rgba(99,102,241,0.6)' : 'none',
+                                            borderRight: pos.includes('right') ? '2.5px solid rgba(99,102,241,0.6)' : 'none',
+                                            borderLeft: pos.includes('left') ? '2.5px solid rgba(99,102,241,0.6)' : 'none',
+                                            borderRadius: 6,
+                                            animation: 'vipGlow 2s ease-in-out infinite',
+                                        }} />
+                                    ))}
+                                </>
+                            )}
+
+                            {/* Top HUD badges */}
                             {faceStatus === 'scanning' && (
                                 <div style={{
-                                    position: 'absolute', top: 8, left: 8, right: 8,
+                                    position: 'absolute', top: 10, left: 10, right: 10,
                                     display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                                 }}>
                                     <div style={{
-                                        background: 'rgba(0,0,0,0.6)', borderRadius: 20, padding: '4px 10px',
-                                        fontSize: 11, fontWeight: 700, color: faceConfidence > 60 ? '#10b981' : '#f59e0b',
-                                        display: 'flex', alignItems: 'center', gap: 4,
+                                        background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(8px)',
+                                        borderRadius: 14, padding: '5px 12px',
+                                        fontSize: 11, fontWeight: 700,
+                                        color: faceConfidence > 60 ? '#34d399' : '#fbbf24',
+                                        display: 'flex', alignItems: 'center', gap: 5,
+                                        border: `1px solid ${faceConfidence > 60 ? 'rgba(16,185,129,0.3)' : 'rgba(245,158,11,0.3)'}`,
+                                        transition: 'all 0.3s ease',
                                     }}>
                                         <Eye size={12} />
-                                        تطابق: {faceConfidence}%
+                                        تطابق {faceConfidence}%
                                     </div>
                                     <div style={{
-                                        background: 'rgba(0,0,0,0.6)', borderRadius: 20, padding: '4px 10px',
-                                        fontSize: 11, fontWeight: 700, color: livenessProgress > 30 ? '#10b981' : '#f59e0b',
+                                        background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(8px)',
+                                        borderRadius: 14, padding: '5px 12px',
+                                        fontSize: 11, fontWeight: 700,
+                                        color: livenessProgress > 30 ? '#34d399' : '#fbbf24',
+                                        border: `1px solid ${livenessProgress > 30 ? 'rgba(16,185,129,0.3)' : 'rgba(245,158,11,0.3)'}`,
+                                        transition: 'all 0.3s ease',
                                     }}>
-                                        حيوية: {livenessProgress}%
+                                        حيوية {livenessProgress}%
                                     </div>
                                 </div>
                             )}
 
-                            {/* Liveness progress bar */}
+                            {/* Progress bar */}
                             {faceStatus === 'scanning' && (
-                                <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0, height: 4, background: 'rgba(0,0,0,0.4)' }}>
+                                <div style={{
+                                    position: 'absolute', bottom: 0, left: 0, right: 0,
+                                    height: 4, background: 'rgba(0,0,0,0.5)',
+                                }}>
                                     <div style={{
                                         height: '100%', borderRadius: 2,
-                                        background: livenessProgress > 30 ? '#10b981' : '#3b82f6',
+                                        background: livenessProgress > 30
+                                            ? 'linear-gradient(90deg, #10b981, #34d399)'
+                                            : 'linear-gradient(90deg, #3b82f6, #818cf8)',
                                         width: `${Math.min(livenessProgress, 100)}%`,
-                                        transition: 'width 300ms ease',
+                                        transition: 'width 300ms ease, background 500ms ease',
+                                        boxShadow: livenessProgress > 30
+                                            ? '0 0 10px rgba(16,185,129,0.5)'
+                                            : '0 0 10px rgba(59,130,246,0.4)',
                                     }} />
                                 </div>
                             )}
 
                             {/* Success overlay */}
                             {faceStatus === 'success' && (
-                                <div style={{ position: 'absolute', inset: 0, background: 'rgba(16,185,129,0.3)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                    <div style={{ textAlign: 'center', color: 'white' }}>
-                                        <CheckCircle size={64} />
-                                        <div style={{ fontSize: 18, fontWeight: 800, marginTop: 8 }}>تم التحقق!</div>
+                                <div style={{
+                                    position: 'absolute', inset: 0,
+                                    background: 'rgba(16,185,129,0.25)',
+                                    backdropFilter: 'blur(4px)',
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                }}>
+                                    <div style={{ textAlign: 'center' }}>
+                                        <div style={{
+                                            width: 80, height: 80, borderRadius: '50%',
+                                            background: 'linear-gradient(135deg, #10b981, #059669)',
+                                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                            margin: '0 auto 12px',
+                                            boxShadow: '0 8px 30px rgba(16,185,129,0.5)',
+                                            animation: 'pulse-glow-green 1.5s ease-in-out infinite',
+                                        }}>
+                                            <CheckCircle size={40} color="white" strokeWidth={2} />
+                                        </div>
+                                        <div style={{ fontSize: 18, fontWeight: 900, color: 'white', textShadow: '0 2px 8px rgba(0,0,0,0.4)' }}>
+                                            تم التحقق بنجاح!
+                                        </div>
                                     </div>
                                 </div>
                             )}
 
                             {/* Loading overlay */}
                             {faceStatus === 'loading' && (
-                                <div style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.8)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 12, color: 'white' }}>
-                                    <Scan size={36} style={{ animation: 'spin 1.5s linear infinite' }} />
-                                    <div style={{ fontSize: 13, fontWeight: 600 }}>جاري تحميل نظام التعرف...</div>
-                                    <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.5)' }}>قد يستغرق بضع ثواني</div>
+                                <div style={{
+                                    position: 'absolute', inset: 0,
+                                    background: 'rgba(0,0,0,0.85)',
+                                    backdropFilter: 'blur(4px)',
+                                    display: 'flex', flexDirection: 'column',
+                                    alignItems: 'center', justifyContent: 'center', gap: 14,
+                                }}>
+                                    <div style={{
+                                        width: 52, height: 52, borderRadius: '50%',
+                                        border: '3px solid rgba(255,255,255,0.1)',
+                                        borderTopColor: '#818cf8',
+                                        animation: 'spin 0.8s linear infinite',
+                                    }} />
+                                    <div style={{ fontSize: 13, fontWeight: 700, color: 'white' }}>
+                                        جاري تحميل نظام التعرف...
+                                    </div>
+                                    <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)' }}>
+                                        قد يستغرق بضع ثواني
+                                    </div>
                                 </div>
                             )}
                         </div>
 
-                        {/* Dynamic Status Text */}
+                        {/* Status message */}
                         <div style={{
-                            fontSize: 14, fontWeight: 700, marginBottom: 4, color:
-                                faceStatus === 'success' ? 'var(--accent-emerald)' : faceStatus === 'fail' ? 'var(--accent-rose)' : 'var(--text-primary)'
+                            fontSize: 14, fontWeight: 700, marginBottom: 6,
+                            color: faceStatus === 'success' ? '#34d399'
+                                : faceStatus === 'fail' ? '#fb7185'
+                                    : 'var(--text-primary)',
                         }}>
                             {scanMessage}
                         </div>
 
                         {biometricError && (
-                            <div style={{ fontSize: 12, color: 'var(--accent-rose)', fontWeight: 600, margin: '8px 0', padding: '8px 12px', borderRadius: 'var(--radius-sm)', background: 'rgba(244,63,94,0.08)' }}>
+                            <div style={{
+                                fontSize: 12, fontWeight: 600, margin: '8px 0',
+                                padding: '10px 14px', borderRadius: 12,
+                                color: '#fb7185',
+                                background: 'rgba(244,63,94,0.08)',
+                                border: '1px solid rgba(244,63,94,0.15)',
+                            }}>
                                 {biometricError}
                             </div>
                         )}
 
-                        <div style={{ display: 'flex', gap: 8, marginTop: 10 }}>
+                        <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
                             {faceStatus === 'fail' && (
                                 <button onClick={handleFaceVerify} style={{
-                                    flex: 1, padding: '12px', borderRadius: 'var(--radius-md)',
-                                    background: 'linear-gradient(135deg, #10b981, #06b6d4)',
-                                    border: 'none', color: 'white', fontSize: 13, fontWeight: 700, cursor: 'pointer',
+                                    flex: 1, padding: '13px', borderRadius: 14,
+                                    background: 'linear-gradient(135deg, #10b981, #059669)',
+                                    border: 'none', color: 'white', fontSize: 13, fontWeight: 700,
+                                    cursor: 'pointer', fontFamily: 'var(--font-arabic)',
+                                    boxShadow: '0 4px 15px rgba(16,185,129,0.3)',
                                 }}>
                                     إعادة المحاولة
                                 </button>
@@ -429,9 +496,12 @@ export default function HomePage() {
                             <button
                                 onClick={() => { setFaceMode(false); cleanupCamera(); setFaceStatus('idle'); setBiometricError(''); setScanMessage(''); framesRef.current = []; }}
                                 style={{
-                                    flex: faceStatus === 'fail' ? 0 : 1, padding: '12px 20px', borderRadius: 'var(--radius-md)',
-                                    background: 'var(--bg-glass)', border: '1px solid var(--border-glass)',
-                                    color: 'var(--text-secondary)', fontSize: 13, fontWeight: 700, cursor: 'pointer',
+                                    flex: faceStatus === 'fail' ? 0 : 1,
+                                    padding: '13px 20px', borderRadius: 14,
+                                    background: 'rgba(255,255,255,0.05)',
+                                    border: '1px solid rgba(255,255,255,0.1)',
+                                    color: 'var(--text-secondary)', fontSize: 13, fontWeight: 700,
+                                    cursor: 'pointer', fontFamily: 'var(--font-arabic)',
                                 }}
                             >
                                 رجوع
@@ -441,74 +511,95 @@ export default function HomePage() {
                 ) : (
                     /* Verification Menu */
                     <div style={{ width: '100%', maxWidth: 360, textAlign: 'center' }}>
+                        {/* Icon */}
                         <div style={{
-                            width: 90, height: 90, borderRadius: '50%', margin: '0 auto 20px',
-                            background: 'linear-gradient(135deg, rgba(59,130,246,0.15), rgba(139,92,246,0.1))',
-                            border: '2px solid rgba(59,130,246,0.25)',
+                            width: 88, height: 88, borderRadius: '50%', margin: '0 auto 22px',
+                            background: 'linear-gradient(135deg, rgba(59,130,246,0.12), rgba(139,92,246,0.08))',
+                            border: '2px solid rgba(99,102,241,0.2)',
                             display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            color: 'var(--accent-blue)',
-                            animation: 'leavePendingPulse 2.5s ease-in-out infinite',
+                            position: 'relative',
                         }}>
-                            <Shield size={42} />
+                            <Shield size={40} color="#818cf8" strokeWidth={1.8} />
+                            {/* Pulse ring */}
+                            <div style={{
+                                position: 'absolute', inset: -6, borderRadius: '50%',
+                                border: '1px solid rgba(99,102,241,0.15)',
+                                animation: 'leavePendingPulse 2.5s ease-in-out infinite',
+                            }} />
                         </div>
 
-                        <h2 style={{ fontSize: 20, fontWeight: 800, marginBottom: 6 }}>التحقق من الهوية</h2>
-                        <p style={{ fontSize: 13, color: 'var(--text-muted)', marginBottom: 24, lineHeight: 1.6 }}>
+                        <h2 style={{ fontSize: 21, fontWeight: 900, marginBottom: 6, color: 'var(--text-primary)' }}>
+                            التحقق من الهوية
+                        </h2>
+                        <p style={{
+                            fontSize: 13, color: 'var(--text-muted)',
+                            marginBottom: 26, lineHeight: 1.8,
+                        }}>
                             يجب التحقق من هويتك قبل الوصول لصفحة الحضور
                         </p>
 
                         {biometricError && (
                             <div style={{
-                                fontSize: 12, color: 'var(--accent-rose)', fontWeight: 600,
-                                marginBottom: 14, padding: '10px 12px', borderRadius: 'var(--radius-sm)',
-                                background: 'rgba(244,63,94,0.08)', border: '1px solid rgba(244,63,94,0.15)',
+                                fontSize: 12, color: '#fb7185', fontWeight: 600,
+                                marginBottom: 16, padding: '10px 14px', borderRadius: 12,
+                                background: 'rgba(244,63,94,0.08)',
+                                border: '1px solid rgba(244,63,94,0.15)',
                             }}>
                                 {biometricError}
                             </div>
                         )}
 
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                            {hasFace && (
+                            {hasFace ? (
                                 <button onClick={handleFaceVerify} style={{
-                                    width: '100%', padding: '16px', borderRadius: 'var(--radius-md)',
-                                    background: 'linear-gradient(135deg, #10b981, #06b6d4)',
-                                    border: 'none', color: 'white', fontSize: 15, fontWeight: 800, cursor: 'pointer',
+                                    width: '100%', padding: '16px', borderRadius: 14,
+                                    background: 'linear-gradient(135deg, #10b981, #059669)',
+                                    border: 'none', color: 'white', fontSize: 15, fontWeight: 800,
+                                    cursor: 'pointer', fontFamily: 'var(--font-arabic)',
                                     display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
+                                    boxShadow: '0 6px 25px rgba(16,185,129,0.3)',
+                                    transition: 'all 0.2s ease',
                                 }}>
-                                    <Camera size={22} />
+                                    <Camera size={20} strokeWidth={2} />
                                     التحقق بالوجه
                                 </button>
-                            )}
-
-                            <button onClick={handleBiometricVerify} disabled={biometricLoading} style={{
-                                width: '100%', padding: '16px', borderRadius: 'var(--radius-md)',
-                                background: 'linear-gradient(135deg, var(--accent-blue), #7c3aed)',
-                                border: 'none', color: 'white', fontSize: 15, fontWeight: 800, cursor: 'pointer',
-                                opacity: biometricLoading ? 0.7 : 1,
-                                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
-                            }}>
-                                <Fingerprint size={22} />
-                                {biometricLoading ? 'جاري التحقق...' : 'بصمة / Face ID / رمز الجهاز'}
-                            </button>
-
-                            {!hasFace && (
-                                <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 4, padding: '8px', borderRadius: 'var(--radius-sm)', background: 'var(--bg-glass)' }}>
-                                    💡 لتفعيل التحقق بالوجه، سجّل وجهك من الملف الشخصي → إعدادات المصادقة
+                            ) : (
+                                <div style={{
+                                    padding: '16px', borderRadius: 14,
+                                    background: 'rgba(245,158,11,0.08)',
+                                    border: '1px solid rgba(245,158,11,0.2)',
+                                    textAlign: 'center',
+                                }}>
+                                    <div style={{ fontSize: 13, fontWeight: 700, color: '#fbbf24', marginBottom: 4 }}>
+                                        ⚠️ لم يتم تسجيل بصمة الوجه
+                                    </div>
+                                    <div style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.8 }}>
+                                        يجب تسجيل بصمة الوجه عند إنشاء الحساب. تواصل مع المدير.
+                                    </div>
                                 </div>
                             )}
                         </div>
 
-                        {/* Security Info */}
+                        {/* Security badge */}
                         <div style={{
-                            marginTop: 20, padding: '10px', borderRadius: 'var(--radius-sm)',
-                            background: 'var(--bg-glass)', fontSize: 10, color: 'var(--text-muted)',
+                            marginTop: 22, padding: '10px 14px', borderRadius: 12,
+                            background: 'rgba(255,255,255,0.03)',
+                            border: '1px solid rgba(255,255,255,0.06)',
+                            fontSize: 10, color: 'var(--text-muted)',
                             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
                         }}>
-                            <ShieldCheck size={14} />
+                            <ShieldCheck size={13} />
                             الجلسة تنتهي تلقائياً بعد 30 دقيقة أو عند مغادرة التطبيق
                         </div>
                     </div>
                 )}
+
+                <style>{`
+                    @keyframes pulse-glow-green {
+                        0%, 100% { box-shadow: 0 8px 30px rgba(16,185,129,0.4); }
+                        50% { box-shadow: 0 8px 50px rgba(16,185,129,0.6); }
+                    }
+                `}</style>
             </div>
         );
     }
