@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Clock, MapPin, Timer, AlertTriangle, CheckCircle, Coffee, RefreshCw, Lock, ShieldAlert, Camera, Scan, Shield, ShieldCheck, Eye } from 'lucide-react';
+import { Clock, MapPin, Timer, AlertTriangle, CheckCircle, Coffee, RefreshCw, Lock, ShieldAlert, Camera, Scan, Shield, ShieldCheck, Eye, ArrowRight } from 'lucide-react';
 import AttendanceButton from '../components/AttendanceButton';
 import StatusCard from '../components/StatusCard';
 import { useAttendance } from '../context/AttendanceContext';
@@ -36,6 +36,7 @@ export default function HomePage() {
     const [userBranch, setUserBranch] = useState<Branch | null>(null);
     const [branchLoading, setBranchLoading] = useState(true);
     const [biometricSettings, setBiometricSettings] = useState<BiometricSettings | null>(null);
+    const [biometricLoading, setBiometricLoading] = useState(true);
     const [biometricError, setBiometricError] = useState('');
     const [biometricVerified, setBiometricVerified] = useState(false);
     const [verifiedAt, setVerifiedAt] = useState<number | null>(null);
@@ -92,12 +93,17 @@ export default function HomePage() {
     // Load biometric settings & sync Firestore data
     useEffect(() => {
         const loadAndCheck = async () => {
-            const settings = await getBiometricSettings();
-            setBiometricSettings(settings);
-            // Preload biometric data from Firestore into localStorage
-            if (user?.id) {
-                await ensureBiometricDataLoaded(user.id);
-                setHasFace(isFaceRegistered(user.id));
+            setBiometricLoading(true);
+            try {
+                const settings = await getBiometricSettings();
+                setBiometricSettings(settings);
+                // Preload biometric data from Firestore into localStorage
+                if (user?.id) {
+                    await ensureBiometricDataLoaded(user.id);
+                    setHasFace(isFaceRegistered(user.id));
+                }
+            } finally {
+                setBiometricLoading(false);
             }
         };
         loadAndCheck();
@@ -310,297 +316,553 @@ export default function HomePage() {
     // Show verification gate if biometric is enabled and not verified
     const needsVerification = biometricSettings?.enabled && !biometricVerified;
 
+    // Block rendering until biometric settings are loaded to prevent security flash
+    if (biometricLoading) {
+        return (
+            <div className="page-enter" style={{
+                position: 'fixed', inset: 0, zIndex: 100,
+                background: 'linear-gradient(160deg, #050810 0%, #0c1221 40%, #0a0f1e 100%)',
+                display: 'flex', flexDirection: 'column', alignItems: 'center',
+                justifyContent: 'center', gap: 16,
+            }}>
+                <div style={{
+                    width: 48, height: 48, borderRadius: '50%',
+                    border: '3px solid rgba(255,255,255,0.06)',
+                    borderTopColor: '#818cf8', borderRightColor: '#6366f1',
+                    animation: 'spin 0.7s linear infinite',
+                }} />
+                <div style={{ fontSize: 13, fontWeight: 700, color: 'rgba(255,255,255,0.5)', fontFamily: 'var(--font-arabic)' }}>
+                    جاري التحقق من الإعدادات...
+                </div>
+                <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+            </div>
+        );
+    }
+
 
     if (needsVerification) {
-        return (
-            <div className="page-content page-enter" style={{
-                display: 'flex', flexDirection: 'column', alignItems: 'center',
-                justifyContent: 'center', minHeight: '80vh', padding: '20px',
-            }}>
-                {/* Face Camera Mode */}
-                {faceMode ? (
-                    <div style={{ width: '100%', maxWidth: 380, textAlign: 'center' }}>
-                        {/* Camera Container */}
-                        <div style={{
-                            position: 'relative', width: '100%', aspectRatio: '3/4',
-                            borderRadius: 20, overflow: 'hidden',
-                            border: `2px solid ${faceStatus === 'success' ? '#10b981'
-                                : faceStatus === 'fail' ? '#f43f5e'
-                                    : 'rgba(99,102,241,0.4)'}`,
-                            background: '#000', marginBottom: 14,
-                            boxShadow: faceStatus === 'success'
-                                ? '0 0 40px rgba(16,185,129,0.3)'
-                                : faceStatus === 'scanning'
-                                    ? '0 0 30px rgba(99,102,241,0.2)'
-                                    : 'none',
-                            transition: 'all 0.5s ease',
-                        }}>
-                            <video ref={videoRef} autoPlay playsInline muted style={{
-                                width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)',
-                            }} />
-                            <canvas ref={canvasRef} style={{
-                                position: 'absolute', inset: 0, width: '100%', height: '100%',
-                                transform: 'scaleX(-1)', pointerEvents: 'none',
-                            }} />
+        const confPct = Math.min(faceConfidence, 100);
+        const livePct = Math.min(livenessProgress, 100);
+        const confColor = confPct > 70 ? '#34d399' : confPct > 40 ? '#fbbf24' : '#818cf8';
+        const liveColor = livePct > 50 ? '#34d399' : livePct > 25 ? '#fbbf24' : '#818cf8';
+        const overallProgress = Math.round((confPct * 0.5 + livePct * 0.5));
+        const scanActive = faceStatus === 'scanning';
 
-                            {/* Scanning corner markers */}
-                            {faceStatus === 'scanning' && (
+        return (
+            <div className="page-enter" style={{
+                position: 'fixed', inset: 0, zIndex: 100,
+                background: 'linear-gradient(160deg, #050810 0%, #0c1221 40%, #0a0f1e 100%)',
+                display: 'flex', flexDirection: 'column', alignItems: 'center',
+                justifyContent: 'center', padding: '16px',
+                fontFamily: 'var(--font-arabic)',
+                overflow: 'hidden',
+            }}>
+                {/* Animated background orbs */}
+                <div style={{
+                    position: 'absolute', width: 320, height: 320, borderRadius: '50%',
+                    background: 'radial-gradient(circle, rgba(99,102,241,0.08), transparent 70%)',
+                    top: '-8%', right: '-12%',
+                    animation: 'fvFloat 8s ease-in-out infinite',
+                    pointerEvents: 'none',
+                }} />
+                <div style={{
+                    position: 'absolute', width: 260, height: 260, borderRadius: '50%',
+                    background: 'radial-gradient(circle, rgba(16,185,129,0.06), transparent 70%)',
+                    bottom: '-5%', left: '-10%',
+                    animation: 'fvFloat 10s ease-in-out infinite reverse',
+                    pointerEvents: 'none',
+                }} />
+
+                {faceMode ? (
+                    <div style={{ width: '100%', maxWidth: 400, textAlign: 'center', position: 'relative', zIndex: 2 }}>
+                        {/* Header with back button */}
+                        <div style={{
+                            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                            marginBottom: 16, padding: '0 4px',
+                        }}>
+                            <button
+                                onClick={() => { setFaceMode(false); cleanupCamera(); setFaceStatus('idle'); setBiometricError(''); setScanMessage(''); framesRef.current = []; }}
+                                style={{
+                                    background: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.08)',
+                                    borderRadius: 12, padding: '8px 16px', color: '#94a3b8',
+                                    fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                                    fontFamily: 'var(--font-arabic)',
+                                    display: 'flex', alignItems: 'center', gap: 6,
+                                    transition: 'all 0.2s ease',
+                                }}
+                            >
+                                <ArrowRight size={14} />
+                                رجوع
+                            </button>
+                            <div style={{
+                                fontSize: 11, fontWeight: 700, color: '#475569',
+                                display: 'flex', alignItems: 'center', gap: 5,
+                            }}>
+                                <Lock size={10} />
+                                مشفّر
+                            </div>
+                        </div>
+
+                        {/* Camera Viewfinder — circular design */}
+                        <div style={{
+                            position: 'relative',
+                            width: 280, height: 280,
+                            margin: '0 auto 20px',
+                        }}>
+                            {/* Outer rotating scan ring */}
+                            {scanActive && (
                                 <>
-                                    {['top-right', 'top-left', 'bottom-right', 'bottom-left'].map(pos => (
-                                        <div key={pos} style={{
-                                            position: 'absolute',
-                                            [pos.includes('top') ? 'top' : 'bottom']: 14,
-                                            [pos.includes('right') ? 'right' : 'left']: 14,
-                                            width: 28, height: 28,
-                                            borderTop: pos.includes('top') ? '2.5px solid rgba(99,102,241,0.6)' : 'none',
-                                            borderBottom: pos.includes('bottom') ? '2.5px solid rgba(99,102,241,0.6)' : 'none',
-                                            borderRight: pos.includes('right') ? '2.5px solid rgba(99,102,241,0.6)' : 'none',
-                                            borderLeft: pos.includes('left') ? '2.5px solid rgba(99,102,241,0.6)' : 'none',
-                                            borderRadius: 6,
-                                            animation: 'vipGlow 2s ease-in-out infinite',
-                                        }} />
-                                    ))}
+                                    <svg style={{
+                                        position: 'absolute', inset: -12,
+                                        width: 'calc(100% + 24px)', height: 'calc(100% + 24px)',
+                                        animation: 'fvRotate 4s linear infinite',
+                                        pointerEvents: 'none',
+                                    }} viewBox="0 0 100 100">
+                                        <circle cx="50" cy="50" r="48" fill="none"
+                                            stroke="url(#scanGrad)" strokeWidth="1.5"
+                                            strokeDasharray="20 80" strokeLinecap="round" />
+                                        <defs>
+                                            <linearGradient id="scanGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+                                                <stop offset="0%" stopColor={confColor} stopOpacity="0.8" />
+                                                <stop offset="100%" stopColor={confColor} stopOpacity="0.1" />
+                                            </linearGradient>
+                                        </defs>
+                                    </svg>
+                                    {/* Inner progress circle */}
+                                    <svg style={{
+                                        position: 'absolute', inset: -6,
+                                        width: 'calc(100% + 12px)', height: 'calc(100% + 12px)',
+                                        transform: 'rotate(-90deg)',
+                                        pointerEvents: 'none',
+                                        transition: 'all 0.5s ease',
+                                    }} viewBox="0 0 100 100">
+                                        <circle cx="50" cy="50" r="47" fill="none"
+                                            stroke="rgba(255,255,255,0.04)" strokeWidth="2" />
+                                        <circle cx="50" cy="50" r="47" fill="none"
+                                            stroke={confColor} strokeWidth="2"
+                                            strokeDasharray={`${overallProgress * 2.95} 295`}
+                                            strokeLinecap="round"
+                                            style={{ transition: 'stroke-dasharray 0.5s ease, stroke 0.5s ease' }} />
+                                    </svg>
                                 </>
                             )}
 
-                            {/* Top HUD badges */}
-                            {faceStatus === 'scanning' && (
-                                <div style={{
-                                    position: 'absolute', top: 10, left: 10, right: 10,
-                                    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                                }}>
-                                    <div style={{
-                                        background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(8px)',
-                                        borderRadius: 14, padding: '5px 12px',
-                                        fontSize: 11, fontWeight: 700,
-                                        color: faceConfidence > 60 ? '#34d399' : '#fbbf24',
-                                        display: 'flex', alignItems: 'center', gap: 5,
-                                        border: `1px solid ${faceConfidence > 60 ? 'rgba(16,185,129,0.3)' : 'rgba(245,158,11,0.3)'}`,
-                                        transition: 'all 0.3s ease',
-                                    }}>
-                                        <Eye size={12} />
-                                        تطابق {faceConfidence}%
-                                    </div>
-                                    <div style={{
-                                        background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(8px)',
-                                        borderRadius: 14, padding: '5px 12px',
-                                        fontSize: 11, fontWeight: 700,
-                                        color: livenessProgress > 30 ? '#34d399' : '#fbbf24',
-                                        border: `1px solid ${livenessProgress > 30 ? 'rgba(16,185,129,0.3)' : 'rgba(245,158,11,0.3)'}`,
-                                        transition: 'all 0.3s ease',
-                                    }}>
-                                        حيوية {livenessProgress}%
-                                    </div>
-                                </div>
-                            )}
+                            {/* Camera circle */}
+                            <div style={{
+                                width: '100%', height: '100%', borderRadius: '50%',
+                                overflow: 'hidden', position: 'relative',
+                                border: `3px solid ${faceStatus === 'success' ? '#10b981'
+                                    : faceStatus === 'fail' ? '#f43f5e'
+                                        : scanActive ? 'rgba(99,102,241,0.5)' : 'rgba(255,255,255,0.08)'
+                                    }`,
+                                boxShadow: faceStatus === 'success'
+                                    ? '0 0 50px rgba(16,185,129,0.35), inset 0 0 30px rgba(16,185,129,0.1)'
+                                    : faceStatus === 'fail'
+                                        ? '0 0 40px rgba(244,63,94,0.25)'
+                                        : scanActive
+                                            ? '0 0 40px rgba(99,102,241,0.15), inset 0 0 20px rgba(0,0,0,0.3)'
+                                            : 'none',
+                                transition: 'all 0.6s ease',
+                            }}>
+                                <video ref={videoRef} autoPlay playsInline muted style={{
+                                    width: '100%', height: '100%', objectFit: 'cover',
+                                    transform: 'scaleX(-1) scale(1.15)',
+                                }} />
+                                <canvas ref={canvasRef} style={{
+                                    position: 'absolute', inset: 0, width: '100%', height: '100%',
+                                    transform: 'scaleX(-1)', pointerEvents: 'none',
+                                }} />
 
-                            {/* Progress bar */}
-                            {faceStatus === 'scanning' && (
-                                <div style={{
-                                    position: 'absolute', bottom: 0, left: 0, right: 0,
-                                    height: 4, background: 'rgba(0,0,0,0.5)',
-                                }}>
+                                {/* Success overlay */}
+                                {faceStatus === 'success' && (
                                     <div style={{
-                                        height: '100%', borderRadius: 2,
-                                        background: livenessProgress > 30
-                                            ? 'linear-gradient(90deg, #10b981, #34d399)'
-                                            : 'linear-gradient(90deg, #3b82f6, #818cf8)',
-                                        width: `${Math.min(livenessProgress, 100)}%`,
-                                        transition: 'width 300ms ease, background 500ms ease',
-                                        boxShadow: livenessProgress > 30
-                                            ? '0 0 10px rgba(16,185,129,0.5)'
-                                            : '0 0 10px rgba(59,130,246,0.4)',
-                                    }} />
-                                </div>
-                            )}
-
-                            {/* Success overlay */}
-                            {faceStatus === 'success' && (
-                                <div style={{
-                                    position: 'absolute', inset: 0,
-                                    background: 'rgba(16,185,129,0.25)',
-                                    backdropFilter: 'blur(4px)',
-                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                }}>
-                                    <div style={{ textAlign: 'center' }}>
+                                        position: 'absolute', inset: 0, borderRadius: '50%',
+                                        background: 'rgba(16,185,129,0.3)',
+                                        backdropFilter: 'blur(6px)',
+                                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                        animation: 'fvFadeIn 0.4s ease',
+                                    }}>
                                         <div style={{
                                             width: 80, height: 80, borderRadius: '50%',
                                             background: 'linear-gradient(135deg, #10b981, #059669)',
                                             display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                            margin: '0 auto 12px',
-                                            boxShadow: '0 8px 30px rgba(16,185,129,0.5)',
-                                            animation: 'pulse-glow-green 1.5s ease-in-out infinite',
+                                            boxShadow: '0 12px 40px rgba(16,185,129,0.5)',
+                                            animation: 'fvPop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1)',
                                         }}>
                                             <CheckCircle size={40} color="white" strokeWidth={2} />
                                         </div>
-                                        <div style={{ fontSize: 18, fontWeight: 900, color: 'white', textShadow: '0 2px 8px rgba(0,0,0,0.4)' }}>
-                                            تم التحقق بنجاح!
+                                    </div>
+                                )}
+
+                                {/* Fail overlay */}
+                                {faceStatus === 'fail' && (
+                                    <div style={{
+                                        position: 'absolute', inset: 0, borderRadius: '50%',
+                                        background: 'rgba(244,63,94,0.2)',
+                                        backdropFilter: 'blur(4px)',
+                                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                        animation: 'fvFadeIn 0.4s ease',
+                                    }}>
+                                        <div style={{
+                                            width: 64, height: 64, borderRadius: '50%',
+                                            background: 'linear-gradient(135deg, #f43f5e, #e11d48)',
+                                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                            boxShadow: '0 8px 30px rgba(244,63,94,0.4)',
+                                        }}>
+                                            <Scan size={30} color="white" strokeWidth={2} />
                                         </div>
                                     </div>
-                                </div>
-                            )}
+                                )}
 
-                            {/* Loading overlay */}
-                            {faceStatus === 'loading' && (
-                                <div style={{
-                                    position: 'absolute', inset: 0,
-                                    background: 'rgba(0,0,0,0.85)',
-                                    backdropFilter: 'blur(4px)',
-                                    display: 'flex', flexDirection: 'column',
-                                    alignItems: 'center', justifyContent: 'center', gap: 14,
-                                }}>
+                                {/* Loading overlay */}
+                                {faceStatus === 'loading' && (
                                     <div style={{
-                                        width: 52, height: 52, borderRadius: '50%',
-                                        border: '3px solid rgba(255,255,255,0.1)',
-                                        borderTopColor: '#818cf8',
-                                        animation: 'spin 0.8s linear infinite',
-                                    }} />
-                                    <div style={{ fontSize: 13, fontWeight: 700, color: 'white' }}>
-                                        جاري تحميل نظام التعرف...
+                                        position: 'absolute', inset: 0, borderRadius: '50%',
+                                        background: 'rgba(0,0,0,0.88)',
+                                        backdropFilter: 'blur(6px)',
+                                        display: 'flex', flexDirection: 'column',
+                                        alignItems: 'center', justifyContent: 'center', gap: 12,
+                                    }}>
+                                        <div style={{
+                                            width: 48, height: 48, borderRadius: '50%',
+                                            border: '3px solid rgba(255,255,255,0.08)',
+                                            borderTopColor: '#818cf8', borderRightColor: '#6366f1',
+                                            animation: 'spin 0.7s linear infinite',
+                                        }} />
+                                        <div style={{ fontSize: 11, fontWeight: 700, color: 'rgba(255,255,255,0.7)' }}>
+                                            جاري التحميل...
+                                        </div>
                                     </div>
-                                    <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)' }}>
-                                        قد يستغرق بضع ثواني
+                                )}
+                            </div>
+
+                            {/* Confidence & Liveness mini badges */}
+                            {scanActive && (
+                                <>
+                                    <div style={{
+                                        position: 'absolute', top: -4, left: '50%', transform: 'translateX(-50%)',
+                                        background: 'rgba(10,15,30,0.85)', backdropFilter: 'blur(12px)',
+                                        borderRadius: 20, padding: '4px 14px',
+                                        fontSize: 10, fontWeight: 800, color: confColor,
+                                        border: `1px solid ${confColor}33`,
+                                        display: 'flex', alignItems: 'center', gap: 5,
+                                        transition: 'all 0.4s ease',
+                                        whiteSpace: 'nowrap',
+                                    }}>
+                                        <Eye size={10} />
+                                        تطابق {confPct}%
                                     </div>
-                                </div>
+                                    <div style={{
+                                        position: 'absolute', bottom: -4, left: '50%', transform: 'translateX(-50%)',
+                                        background: 'rgba(10,15,30,0.85)', backdropFilter: 'blur(12px)',
+                                        borderRadius: 20, padding: '4px 14px',
+                                        fontSize: 10, fontWeight: 800, color: liveColor,
+                                        border: `1px solid ${liveColor}33`,
+                                        display: 'flex', alignItems: 'center', gap: 5,
+                                        transition: 'all 0.4s ease',
+                                        whiteSpace: 'nowrap',
+                                    }}>
+                                        <Shield size={10} />
+                                        حيوية {livePct}%
+                                    </div>
+                                </>
                             )}
                         </div>
 
-                        {/* Status message */}
+                        {/* Status message with icon */}
                         <div style={{
-                            fontSize: 14, fontWeight: 700, marginBottom: 6,
+                            fontSize: 15, fontWeight: 800, marginBottom: 4,
                             color: faceStatus === 'success' ? '#34d399'
                                 : faceStatus === 'fail' ? '#fb7185'
-                                    : 'var(--text-primary)',
+                                    : '#e2e8f0',
+                            transition: 'color 0.3s ease',
                         }}>
-                            {scanMessage}
+                            {faceStatus === 'success' ? '✅ تم التحقق بنجاح!'
+                                : faceStatus === 'fail' ? '❌ فشل التحقق'
+                                    : scanMessage}
                         </div>
 
+                        {/* Smart guidance text */}
+                        {scanActive && (
+                            <div style={{
+                                fontSize: 11, color: '#64748b', fontWeight: 600,
+                                marginBottom: 8, lineHeight: 1.8,
+                            }}>
+                                {confPct === 0 && livePct === 0 && 'وجّه وجهك نحو الكاميرا في إضاءة جيدة'}
+                                {confPct > 0 && confPct <= 40 && 'جاري مطابقة ملامح الوجه...'}
+                                {confPct > 40 && livePct < 25 && '🔄 حرّك رأسك ببطء يميناً ويساراً'}
+                                {confPct > 40 && livePct >= 25 && livePct < 50 && 'جيد! استمر بالحركة البطيئة...'}
+                                {confPct > 60 && livePct >= 50 && 'جاري التأكيد النهائي...'}
+                            </div>
+                        )}
+
+                        {/* Error message */}
                         {biometricError && (
                             <div style={{
-                                fontSize: 12, fontWeight: 600, margin: '8px 0',
-                                padding: '10px 14px', borderRadius: 12,
+                                fontSize: 12, fontWeight: 700, margin: '8px auto',
+                                padding: '10px 18px', borderRadius: 14, maxWidth: 340,
                                 color: '#fb7185',
-                                background: 'rgba(244,63,94,0.08)',
-                                border: '1px solid rgba(244,63,94,0.15)',
+                                background: 'rgba(244,63,94,0.06)',
+                                border: '1px solid rgba(244,63,94,0.12)',
                             }}>
                                 {biometricError}
                             </div>
                         )}
 
-                        <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                        {/* Real-time metrics bar */}
+                        {scanActive && (
+                            <div style={{
+                                display: 'flex', gap: 8, justifyContent: 'center',
+                                margin: '14px auto', maxWidth: 320,
+                            }}>
+                                <div style={{
+                                    flex: 1, padding: '10px 8px', borderRadius: 14,
+                                    background: 'rgba(255,255,255,0.03)',
+                                    border: '1px solid rgba(255,255,255,0.05)',
+                                    textAlign: 'center',
+                                }}>
+                                    <div style={{ fontSize: 9, color: '#475569', fontWeight: 700, marginBottom: 6 }}>مطابقة الوجه</div>
+                                    <div style={{
+                                        height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.06)',
+                                        overflow: 'hidden',
+                                    }}>
+                                        <div style={{
+                                            width: `${confPct}%`, height: '100%', borderRadius: 2,
+                                            background: `linear-gradient(90deg, ${confColor}, ${confColor}cc)`,
+                                            transition: 'width 0.4s ease',
+                                            boxShadow: `0 0 8px ${confColor}55`,
+                                        }} />
+                                    </div>
+                                    <div style={{ fontSize: 16, fontWeight: 900, color: confColor, marginTop: 4, fontFamily: 'var(--font-numeric)' }}>
+                                        {confPct}%
+                                    </div>
+                                </div>
+                                <div style={{
+                                    flex: 1, padding: '10px 8px', borderRadius: 14,
+                                    background: 'rgba(255,255,255,0.03)',
+                                    border: '1px solid rgba(255,255,255,0.05)',
+                                    textAlign: 'center',
+                                }}>
+                                    <div style={{ fontSize: 9, color: '#475569', fontWeight: 700, marginBottom: 6 }}>كشف الحيوية</div>
+                                    <div style={{
+                                        height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.06)',
+                                        overflow: 'hidden',
+                                    }}>
+                                        <div style={{
+                                            width: `${livePct}%`, height: '100%', borderRadius: 2,
+                                            background: `linear-gradient(90deg, ${liveColor}, ${liveColor}cc)`,
+                                            transition: 'width 0.4s ease',
+                                            boxShadow: `0 0 8px ${liveColor}55`,
+                                        }} />
+                                    </div>
+                                    <div style={{ fontSize: 16, fontWeight: 900, color: liveColor, marginTop: 4, fontFamily: 'var(--font-numeric)' }}>
+                                        {livePct}%
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {/* Action buttons */}
+                        <div style={{ display: 'flex', gap: 8, marginTop: 16, maxWidth: 320, margin: '16px auto 0' }}>
                             {faceStatus === 'fail' && (
                                 <button onClick={handleFaceVerify} style={{
-                                    flex: 1, padding: '13px', borderRadius: 14,
-                                    background: 'linear-gradient(135deg, #10b981, #059669)',
-                                    border: 'none', color: 'white', fontSize: 13, fontWeight: 700,
+                                    flex: 1, padding: '14px', borderRadius: 14,
+                                    background: 'linear-gradient(135deg, #3b82f6, #6366f1)',
+                                    border: 'none', color: 'white', fontSize: 14, fontWeight: 800,
                                     cursor: 'pointer', fontFamily: 'var(--font-arabic)',
-                                    boxShadow: '0 4px 15px rgba(16,185,129,0.3)',
+                                    boxShadow: '0 6px 25px rgba(99,102,241,0.3)',
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
                                 }}>
+                                    <Camera size={16} />
                                     إعادة المحاولة
                                 </button>
                             )}
-                            <button
-                                onClick={() => { setFaceMode(false); cleanupCamera(); setFaceStatus('idle'); setBiometricError(''); setScanMessage(''); framesRef.current = []; }}
-                                style={{
-                                    flex: faceStatus === 'fail' ? 0 : 1,
-                                    padding: '13px 20px', borderRadius: 14,
-                                    background: 'rgba(255,255,255,0.05)',
-                                    border: '1px solid rgba(255,255,255,0.1)',
-                                    color: 'var(--text-secondary)', fontSize: 13, fontWeight: 700,
-                                    cursor: 'pointer', fontFamily: 'var(--font-arabic)',
-                                }}
-                            >
-                                رجوع
-                            </button>
+                            {(faceStatus === 'fail' || faceStatus === 'idle') && (
+                                <button
+                                    onClick={() => { setFaceMode(false); cleanupCamera(); setFaceStatus('idle'); setBiometricError(''); setScanMessage(''); framesRef.current = []; }}
+                                    style={{
+                                        flex: faceStatus === 'fail' ? 0 : 1,
+                                        padding: '14px 20px', borderRadius: 14,
+                                        background: 'rgba(255,255,255,0.04)',
+                                        border: '1px solid rgba(255,255,255,0.08)',
+                                        color: '#94a3b8', fontSize: 13, fontWeight: 700,
+                                        cursor: 'pointer', fontFamily: 'var(--font-arabic)',
+                                    }}
+                                >
+                                    رجوع
+                                </button>
+                            )}
                         </div>
                     </div>
                 ) : (
-                    /* Verification Menu */
-                    <div style={{ width: '100%', maxWidth: 360, textAlign: 'center' }}>
-                        {/* Icon */}
+                    /* ========== Verification Menu ========== */
+                    <div style={{ width: '100%', maxWidth: 380, textAlign: 'center', position: 'relative', zIndex: 2 }}>
+                        {/* Animated shield icon */}
                         <div style={{
-                            width: 88, height: 88, borderRadius: '50%', margin: '0 auto 22px',
-                            background: 'linear-gradient(135deg, rgba(59,130,246,0.12), rgba(139,92,246,0.08))',
+                            width: 100, height: 100, borderRadius: '50%', margin: '0 auto 24px',
+                            background: 'linear-gradient(135deg, rgba(99,102,241,0.15), rgba(139,92,246,0.1))',
                             border: '2px solid rgba(99,102,241,0.2)',
                             display: 'flex', alignItems: 'center', justifyContent: 'center',
                             position: 'relative',
+                            boxShadow: '0 8px 40px rgba(99,102,241,0.15)',
                         }}>
-                            <Shield size={40} color="#818cf8" strokeWidth={1.8} />
+                            <Shield size={44} color="#818cf8" strokeWidth={1.6} />
+                            {/* Rotating outer ring */}
+                            <svg style={{
+                                position: 'absolute', inset: -10,
+                                width: 'calc(100% + 20px)', height: 'calc(100% + 20px)',
+                                animation: 'fvRotate 6s linear infinite',
+                                pointerEvents: 'none',
+                            }} viewBox="0 0 100 100">
+                                <circle cx="50" cy="50" r="48" fill="none"
+                                    stroke="rgba(99,102,241,0.12)" strokeWidth="1"
+                                    strokeDasharray="15 85" strokeLinecap="round" />
+                            </svg>
                             {/* Pulse ring */}
                             <div style={{
-                                position: 'absolute', inset: -6, borderRadius: '50%',
-                                border: '1px solid rgba(99,102,241,0.15)',
-                                animation: 'leavePendingPulse 2.5s ease-in-out infinite',
+                                position: 'absolute', inset: -8, borderRadius: '50%',
+                                border: '1px solid rgba(99,102,241,0.1)',
+                                animation: 'fvPulse 3s ease-in-out infinite',
                             }} />
                         </div>
 
-                        <h2 style={{ fontSize: 21, fontWeight: 900, marginBottom: 6, color: 'var(--text-primary)' }}>
+                        <h2 style={{
+                            fontSize: 24, fontWeight: 900, marginBottom: 8,
+                            color: '#f1f5f9',
+                            letterSpacing: '-0.3px',
+                        }}>
                             التحقق من الهوية
                         </h2>
                         <p style={{
-                            fontSize: 13, color: 'var(--text-muted)',
-                            marginBottom: 26, lineHeight: 1.8,
+                            fontSize: 13, color: '#64748b',
+                            marginBottom: 28, lineHeight: 2,
                         }}>
-                            يجب التحقق من هويتك قبل الوصول لصفحة الحضور
+                            يجب التحقق من هويتك البيومترية
+                            <br />
+                            <span style={{ fontSize: 11, color: '#475569' }}>قبل الوصول إلى نظام الحضور</span>
                         </p>
 
                         {biometricError && (
                             <div style={{
-                                fontSize: 12, color: '#fb7185', fontWeight: 600,
-                                marginBottom: 16, padding: '10px 14px', borderRadius: 12,
-                                background: 'rgba(244,63,94,0.08)',
-                                border: '1px solid rgba(244,63,94,0.15)',
+                                fontSize: 12, color: '#fb7185', fontWeight: 700,
+                                marginBottom: 18, padding: '12px 16px', borderRadius: 14,
+                                background: 'rgba(244,63,94,0.06)',
+                                border: '1px solid rgba(244,63,94,0.1)',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
                             }}>
+                                <Scan size={14} />
                                 {biometricError}
                             </div>
                         )}
 
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-                            {hasFace ? (
-                                <button onClick={handleFaceVerify} style={{
-                                    width: '100%', padding: '16px', borderRadius: 14,
-                                    background: 'linear-gradient(135deg, #10b981, #059669)',
-                                    border: 'none', color: 'white', fontSize: 15, fontWeight: 800,
-                                    cursor: 'pointer', fontFamily: 'var(--font-arabic)',
-                                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
-                                    boxShadow: '0 6px 25px rgba(16,185,129,0.3)',
-                                    transition: 'all 0.2s ease',
-                                }}>
-                                    <Camera size={20} strokeWidth={2} />
-                                    التحقق بالوجه
-                                </button>
-                            ) : (
+                        {hasFace ? (
+                            <button onClick={handleFaceVerify} style={{
+                                width: '100%', padding: '18px', borderRadius: 16,
+                                background: 'linear-gradient(135deg, #10b981 0%, #059669 50%, #047857 100%)',
+                                border: 'none', color: 'white', fontSize: 16, fontWeight: 900,
+                                cursor: 'pointer', fontFamily: 'var(--font-arabic)',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12,
+                                boxShadow: '0 8px 35px rgba(16,185,129,0.3), 0 2px 4px rgba(0,0,0,0.2)',
+                                transition: 'all 0.3s ease',
+                                position: 'relative',
+                                overflow: 'hidden',
+                            }}>
+                                <Camera size={20} strokeWidth={2.2} />
+                                التحقق بالوجه
+                                {/* Shimmer effect */}
                                 <div style={{
-                                    padding: '16px', borderRadius: 14,
-                                    background: 'rgba(245,158,11,0.08)',
-                                    border: '1px solid rgba(245,158,11,0.2)',
-                                    textAlign: 'center',
+                                    position: 'absolute', inset: 0,
+                                    background: 'linear-gradient(105deg, transparent 40%, rgba(255,255,255,0.1) 50%, transparent 60%)',
+                                    animation: 'fvShimmer 3s ease-in-out infinite',
+                                }} />
+                            </button>
+                        ) : (
+                            <div style={{
+                                padding: '20px', borderRadius: 16,
+                                background: 'rgba(245,158,11,0.05)',
+                                border: '1px solid rgba(245,158,11,0.12)',
+                                textAlign: 'center',
+                            }}>
+                                <div style={{
+                                    width: 48, height: 48, borderRadius: '50%',
+                                    background: 'rgba(245,158,11,0.1)',
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                    margin: '0 auto 12px',
                                 }}>
-                                    <div style={{ fontSize: 13, fontWeight: 700, color: '#fbbf24', marginBottom: 4 }}>
-                                        ⚠️ لم يتم تسجيل بصمة الوجه
-                                    </div>
-                                    <div style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.8 }}>
-                                        يجب تسجيل بصمة الوجه عند إنشاء الحساب. تواصل مع المدير.
-                                    </div>
+                                    <Camera size={22} color="#fbbf24" />
                                 </div>
-                            )}
-                        </div>
+                                <div style={{ fontSize: 14, fontWeight: 800, color: '#fbbf24', marginBottom: 6 }}>
+                                    لم يتم تسجيل بصمة الوجه
+                                </div>
+                                <div style={{ fontSize: 11, color: '#64748b', lineHeight: 2 }}>
+                                    يجب تسجيل بصمة الوجه عند إنشاء الحساب
+                                    <br />
+                                    تواصل مع المدير لإعادة التسجيل
+                                </div>
+                            </div>
+                        )}
 
-                        {/* Security badge */}
-                        <div style={{
-                            marginTop: 22, padding: '10px 14px', borderRadius: 12,
-                            background: 'rgba(255,255,255,0.03)',
-                            border: '1px solid rgba(255,255,255,0.06)',
-                            fontSize: 10, color: 'var(--text-muted)',
-                            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-                        }}>
-                            <ShieldCheck size={13} />
-                            الجلسة تنتهي تلقائياً بعد 30 دقيقة أو عند مغادرة التطبيق
+                        {/* Info cards */}
+                        <div style={{ display: 'flex', gap: 8, marginTop: 20 }}>
+                            <div style={{
+                                flex: 1, padding: '12px', borderRadius: 14,
+                                background: 'rgba(255,255,255,0.02)',
+                                border: '1px solid rgba(255,255,255,0.04)',
+                                textAlign: 'center',
+                            }}>
+                                <Lock size={14} color="#475569" style={{ marginBottom: 4 }} />
+                                <div style={{ fontSize: 9, color: '#475569', fontWeight: 700 }}>
+                                    مشفّر بالكامل
+                                </div>
+                            </div>
+                            <div style={{
+                                flex: 1, padding: '12px', borderRadius: 14,
+                                background: 'rgba(255,255,255,0.02)',
+                                border: '1px solid rgba(255,255,255,0.04)',
+                                textAlign: 'center',
+                            }}>
+                                <ShieldCheck size={14} color="#475569" style={{ marginBottom: 4 }} />
+                                <div style={{ fontSize: 9, color: '#475569', fontWeight: 700 }}>
+                                    جلسة 30 دقيقة
+                                </div>
+                            </div>
+                            <div style={{
+                                flex: 1, padding: '12px', borderRadius: 14,
+                                background: 'rgba(255,255,255,0.02)',
+                                border: '1px solid rgba(255,255,255,0.04)',
+                                textAlign: 'center',
+                            }}>
+                                <Eye size={14} color="#475569" style={{ marginBottom: 4 }} />
+                                <div style={{ fontSize: 9, color: '#475569', fontWeight: 700 }}>
+                                    كشف حيوية
+                                </div>
+                            </div>
                         </div>
                     </div>
                 )}
 
                 <style>{`
+                    @keyframes fvRotate { to { transform: rotate(360deg); } }
+                    @keyframes fvFloat {
+                        0%, 100% { transform: translateY(0) scale(1); }
+                        50% { transform: translateY(-25px) scale(1.05); }
+                    }
+                    @keyframes fvPulse {
+                        0%, 100% { transform: scale(1); opacity: 0.5; }
+                        50% { transform: scale(1.15); opacity: 0; }
+                    }
+                    @keyframes fvFadeIn {
+                        from { opacity: 0; }
+                        to { opacity: 1; }
+                    }
+                    @keyframes fvPop {
+                        0% { transform: scale(0); }
+                        100% { transform: scale(1); }
+                    }
+                    @keyframes fvShimmer {
+                        0% { transform: translateX(-100%); }
+                        50%, 100% { transform: translateX(100%); }
+                    }
                     @keyframes pulse-glow-green {
                         0%, 100% { box-shadow: 0 8px 30px rgba(16,185,129,0.4); }
                         50% { box-shadow: 0 8px 50px rgba(16,185,129,0.6); }
