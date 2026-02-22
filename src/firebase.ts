@@ -2,6 +2,7 @@ import { initializeApp } from "firebase/app";
 import { getAuth, GoogleAuthProvider, browserLocalPersistence, setPersistence } from "firebase/auth";
 import { getFirestore, enableIndexedDbPersistence } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
+import { getMessaging, getToken, onMessage } from "firebase/messaging";
 
 const firebaseConfig = {
     apiKey: "AIzaSyA-opqMrshlSsRd43YfPi3G0NZcb-Z2u3c",
@@ -31,4 +32,13 @@ enableIndexedDbPersistence(db).catch((err) => {
     }
 });
 
+// Initialize FCM (may fail in unsupported browsers)
+let messaging: ReturnType<typeof getMessaging> | null = null;
+try {
+    messaging = getMessaging(app);
+} catch (e) {
+    console.warn('FCM not supported in this browser');
+}
+
+export { messaging, getToken, onMessage };
 export default app;

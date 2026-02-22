@@ -135,7 +135,8 @@ export default function ChatPage({ onBack }: Props) {
         if ((!newMsg.trim() && !opts?.fileUrl && !opts?.location) || !activeChat || !user) return;
         setSending(true); const t = newMsg.trim(); setNewMsg(''); setShowEmoji(false);
         try {
-            const d: any = { text: opts?.type === 'image' ? '📷 صورة' : opts?.type === 'file' ? `📎 ${opts.fileName}` : opts?.type === 'location' ? '📍 الموقع الحالي' : t, senderId: uid, senderName: user.name, createdAt: serverTimestamp(), type: opts?.type || 'text', readBy: { [uid]: true } };
+            const toUid = activeChat.otherUser.id;
+            const d: any = { text: opts?.type === 'image' ? '📷 صورة' : opts?.type === 'file' ? `📎 ${opts.fileName}` : opts?.type === 'location' ? '📍 الموقع الحالي' : t, senderId: uid, senderName: user.name, toUid, createdAt: serverTimestamp(), type: opts?.type || 'text', readBy: { [uid]: true } };
             if (opts?.fileUrl) d.fileUrl = opts.fileUrl; if (opts?.fileName) d.fileName = opts.fileName; if (opts?.fileSize) d.fileSize = opts.fileSize;
             if (opts?.location) d.location = opts.location;
             if (disappear > 0) d.disappearAfter = disappear;
@@ -147,7 +148,18 @@ export default function ChatPage({ onBack }: Props) {
 
     const doEdit = async () => { if (!editMsg || !editTxt.trim() || !activeChat) return; try { await updateDoc(doc(db, 'conversations', activeChat.convId, 'messages', editMsg.id), { text: editTxt.trim(), edited: true }); await setDoc(doc(db, 'conversations', activeChat.convId), { lastMessage: editTxt.trim() }, { merge: true }); } catch (e) { } setEditMsg(null); setEditTxt(''); };
     const doDelete = async (m: Message) => { if (!activeChat) return; try { await updateDoc(doc(db, 'conversations', activeChat.convId, 'messages', m.id), { deleted: true, text: 'تم حذف هذه الرسالة' }); } catch (e) { } setCtxMsg(null); };
-    const deleteConv = async (id: string) => { try { await deleteDoc(doc(db, 'conversations', id)); } catch (e) { } setDeleteConfirm(null); if (activeChat?.convId === id) setActiveChat(null); };
+    const deleteConv = async (id: string) => {
+        try {
+            // Delete all messages in subcollection first
+            const msgsSnap = await getDocs(collection(db, 'conversations', id, 'messages'));
+            const deletePromises = msgsSnap.docs.map(d => deleteDoc(doc(db, 'conversations', id, 'messages', d.id)));
+            await Promise.all(deletePromises);
+            // Then delete the conversation document
+            await deleteDoc(doc(db, 'conversations', id));
+        } catch (e) { console.error('Delete conv error:', e); }
+        setDeleteConfirm(null);
+        if (activeChat?.convId === id) setActiveChat(null);
+    };
     const doUpload = async (f: File, t: 'image' | 'file') => { if (!activeChat || !user) return; setUploading(true); setShowAttach(false); try { const p = `chat/${activeChat.convId}/${Date.now()}_${f.name}`; const r = ref(storage, p); await uploadBytes(r, f); const url = await getDownloadURL(r); const sz = f.size > 1048576 ? `${(f.size / 1048576).toFixed(1)} MB` : `${(f.size / 1024).toFixed(0)} KB`; await sendMessage({ type: t, fileUrl: url, fileName: f.name, fileSize: sz }); } catch (e) { } setUploading(false); };
     const sendLocation = () => { setShowAttach(false); if (!navigator.geolocation) return; navigator.geolocation.getCurrentPosition(pos => { sendMessage({ type: 'location', location: { lat: pos.coords.latitude, lng: pos.coords.longitude } }); }, () => { }); };
 
@@ -157,7 +169,7 @@ export default function ChatPage({ onBack }: Props) {
     const getDateLabel = (ts: Timestamp | null) => { if (!ts) return ''; const d = ts.toDate(), now = new Date(), today = new Date(now.getFullYear(), now.getMonth(), now.getDate()), md = new Date(d.getFullYear(), d.getMonth(), d.getDate()), diff = (today.getTime() - md.getTime()) / 86400000; if (diff === 0) return 'اليوم'; if (diff === 1) return 'أمس'; return d.toLocaleDateString('ar-IQ', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' }); };
     const getBgStyle = () => { const o = BG_OPTIONS.find(b => b.id === chatBg); return o?.bg || 'transparent'; };
 
-    const css = `@keyframes spin{to{transform:rotate(360deg)}}@keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}@keyframes slideUp{from{opacity:0;transform:translateY(100%)}to{opacity:1;transform:translateY(0)}}@keyframes msgIn{from{opacity:0;transform:scale(.95) translateY(6px)}to{opacity:1;transform:scale(1) translateY(0)}}.eg{display:grid;grid-template-columns:repeat(8,1fr);gap:2px}.eb{font-size:22px;padding:6px;border-radius:8px;background:none;border:none;cursor:pointer;transition:all .15s;text-align:center}.eb:hover,.eb:active{background:var(--bg-glass-strong);transform:scale(1.2)}.cm{position:fixed;z-index:1000;background:var(--bg-card);border:1px solid var(--border-glass);border-radius:var(--radius-lg);box-shadow:0 8px 32px rgba(0,0,0,.3);padding:6px;min-width:170px;animation:fadeUp .15s ease}.ci{display:flex;align-items:center;gap:8px;padding:10px 14px;border-radius:var(--radius-md);font-size:13px;font-weight:700;cursor:pointer;border:none;background:none;width:100%;text-align:right;color:var(--text-primary);font-family:var(--font-arabic);transition:all .15s}.ci:hover{background:var(--bg-glass)}.ci.dl{color:#f43f5e}`;
+    const css = `@keyframes spin{to{transform:rotate(360deg)}}@keyframes fadeUp{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}@keyframes slideUp{from{opacity:0;transform:translateY(100%)}to{opacity:1;transform:translateY(0)}}@keyframes msgIn{from{opacity:0;transform:scale(.95) translateY(6px)}to{opacity:1;transform:scale(1) translateY(0)}}.eg{display:grid;grid-template-columns:repeat(8,1fr);gap:2px}.eb{font-size:22px;padding:6px;border-radius:8px;background:none;border:none;cursor:pointer;transition:all .15s;text-align:center}.eb:hover,.eb:active{background:var(--bg-glass-strong);transform:scale(1.2)}.cm{position:fixed;z-index:1000;background:var(--bg-card);border:1px solid var(--border-glass);border-radius:var(--radius-lg);box-shadow:0 8px 32px rgba(0,0,0,.3);padding:6px;min-width:170px;animation:fadeUp .15s ease}.ci{display:flex;align-items:center;gap:8px;padding:10px 14px;border-radius:var(--radius-md);font-size:13px;font-weight:700;cursor:pointer;border:none;background:none;width:100%;text-align:right;color:var(--text-primary);font-family:var(--font-arabic);transition:all .15s}.ci:hover{background:var(--bg-glass)}.ci.dl{color:#f43f5e}.chat-root{width:100%;max-width:100vw;overflow-x:hidden;overscroll-behavior:none;touch-action:pan-y;-webkit-overflow-scrolling:touch;box-sizing:border-box}.chat-msgs{overscroll-behavior-y:contain;-webkit-overflow-scrolling:touch;touch-action:pan-y}.chat-root *{max-width:100%;box-sizing:border-box}.chat-root img{max-width:100%!important;height:auto}`;
 
     // ================= CHAT VIEW =================
     if (activeChat) {
@@ -165,7 +177,7 @@ export default function ChatPage({ onBack }: Props) {
         let lastDateLabel = '';
         const bgVal = getBgStyle();
         return (
-            <div className="page-content page-enter" style={{ display: 'flex', flexDirection: 'column', height: 'calc(100dvh - var(--nav-height) - 60px)', padding: 0 }}>
+            <div className="page-content page-enter chat-root" style={{ display: 'flex', flexDirection: 'column', height: 'calc(100dvh - var(--nav-height, 60px) - 60px)', padding: 0, overflow: 'hidden', position: 'relative', width: '100%', maxWidth: '100vw' }}>
                 <style>{css}</style>
                 {/* Top header */}
                 <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', borderBottom: '1px solid var(--border-glass)', background: 'var(--bg-glass)', backdropFilter: 'blur(20px)', flexShrink: 0 }}>
@@ -190,7 +202,7 @@ export default function ChatPage({ onBack }: Props) {
                 {disappear > 0 && <div style={{ padding: '6px 14px', background: 'rgba(245,158,11,.06)', borderBottom: '1px solid rgba(245,158,11,.12)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, fontSize: 11, fontWeight: 700, color: '#f59e0b', flexShrink: 0 }}><EyeOff size={12} />الرسائل ستختفي بعد {disappear < 60 ? `${disappear} ث` : `${disappear / 60} د`}</div>}
 
                 {/* Messages area */}
-                <div style={{ flex: 1, overflowY: 'auto', padding: '14px 16px', display: 'flex', flexDirection: 'column', gap: 8, background: bgVal.startsWith('linear') ? bgVal : undefined, backgroundColor: !bgVal.startsWith('linear') ? bgVal : undefined }}>
+                <div className="chat-msgs" style={{ flex: 1, overflowY: 'auto', overflowX: 'hidden', padding: '14px 12px', display: 'flex', flexDirection: 'column', gap: 8, background: bgVal.startsWith('linear') ? bgVal : undefined, backgroundColor: !bgVal.startsWith('linear') ? bgVal : undefined, overscrollBehavior: 'contain', touchAction: 'pan-y', WebkitOverflowScrolling: 'touch' }}>
                     {msgs.length === 0 && <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', color: 'var(--text-muted)', gap: 10 }}><MessageCircle size={44} style={{ opacity: .2 }} /><div style={{ fontSize: 14, fontWeight: 700 }}>ابدأ المحادثة مع {otherUser.name}</div></div>}
                     {msgs.map(msg => {
                         const isMe = msg.senderId === uid, isDel = msg.deleted === true;
@@ -272,7 +284,7 @@ export default function ChatPage({ onBack }: Props) {
 
     // ================= MAIN LIST =================
     return (
-        <div className="page-content page-enter">
+        <div className="page-content page-enter chat-root" style={{ overscrollBehavior: 'contain' }}>
             <style>{css}</style>
             {/* Header with back button and title */}
             <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, padding: '0 2px' }}>

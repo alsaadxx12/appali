@@ -1,14 +1,14 @@
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { User } from '../types';
 import { DEMO_USERS } from '../data/demoData';
-import { auth, googleProvider, db } from '../firebase';
+import { auth, googleProvider, db, messaging, getToken } from '../firebase';
 import {
     signInWithPopup,
     signOut,
     onAuthStateChanged,
     User as FirebaseUser,
 } from 'firebase/auth';
-import { doc, getDoc, setDoc, updateDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, onSnapshot, serverTimestamp, arrayUnion } from 'firebase/firestore';
 
 interface ProfileUpdate {
     name?: string;
@@ -205,6 +205,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         };
 
         goOnline();
+
+        // Save FCM token for push notifications
+        (async () => {
+            try {
+                if (messaging && 'Notification' in window) {
+                    const permission = await Notification.requestPermission();
+                    if (permission === 'granted') {
+                        const token = await getToken(messaging, {
+                            vapidKey: 'BNn7YwSLzj0dqJH1dM5WyL_5QmS0ybk1fDBJKMOvT2MrG1_sRKKJF3xPjR_B2UvZ3Rk2v0k0y8xPFpGk0qCwSU'
+                        }).catch(() => null);
+                        if (token) {
+                            await updateDoc(userRef, { fcmTokens: arrayUnion(token) }).catch(() => { });
+                            console.log('✅ FCM token saved');
+                        }
+                    }
+                }
+            } catch (e) { console.warn('FCM token error:', e); }
+        })();
 
         const handleVisibility = () => {
             if (document.visibilityState === 'visible') goOnline();
