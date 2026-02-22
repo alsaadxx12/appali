@@ -2,23 +2,31 @@
     "name": "الحضور والانصراف",
     "short_name": "حضور",
     "description": "تطبيق الحضور والانصراف - نظام إدارة حضور الموظفين",
+    "id": "/",
     "start_url": "/",
+    "scope": "/",
     "display": "standalone",
     "background_color": "#0a0e1a",
     "theme_color": "#0a0e1a",
     "orientation": "portrait",
     "dir": "rtl",
     "lang": "ar",
+    "categories": [
+        "business",
+        "productivity"
+    ],
     "icons": [
         {
             "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 192 192'%3E%3Crect width='192' height='192' rx='40' fill='%230a0e1a'/%3E%3Ccircle cx='96' cy='96' r='60' fill='none' stroke='%2310b981' stroke-width='4'/%3E%3Cline x1='96' y1='56' x2='96' y2='96' stroke='%2310b981' stroke-width='4' stroke-linecap='round'/%3E%3Cline x1='96' y1='96' x2='120' y2='108' stroke='%2314b8a6' stroke-width='3' stroke-linecap='round'/%3E%3Ccircle cx='96' cy='96' r='4' fill='%2310b981'/%3E%3C/svg%3E",
             "sizes": "192x192",
-            "type": "image/svg+xml"
+            "type": "image/svg+xml",
+            "purpose": "any maskable"
         },
         {
             "src": "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 512 512'%3E%3Crect width='512' height='512' rx='100' fill='%230a0e1a'/%3E%3Ccircle cx='256' cy='256' r='160' fill='none' stroke='%2310b981' stroke-width='8'/%3E%3Cline x1='256' y1='136' x2='256' y2='256' stroke='%2310b981' stroke-width='8' stroke-linecap='round'/%3E%3Cline x1='256' y1='256' x2='320' y2='288' stroke='%2314b8a6' stroke-width='6' stroke-linecap='round'/%3E%3Ccircle cx='256' cy='256' r='8' fill='%2310b981'/%3E%3C/svg%3E",
             "sizes": "512x512",
-            "type": "image/svg+xml"
+            "type": "image/svg+xml",
+            "purpose": "any maskable"
         }
     ]
 }
