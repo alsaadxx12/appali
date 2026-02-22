@@ -760,101 +760,160 @@ export default function EmployeeManagementPage({ onBack }: Props) {
                     )}
 
                     {/* Employee List */}
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 80 }}>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginBottom: 80 }}>
                         {filteredEmployees.map((emp, idx) => {
                             const initials = emp.name.split(' ').map(w => w[0]).join('').slice(0, 2);
                             const color = AVATAR_COLORS[idx % AVATAR_COLORS.length];
                             const isDeleting = deleteConfirm === emp.id;
                             const group = getGroupById(emp.permissionGroupId);
+                            const isInactive = emp.isActive === false;
 
                             return (
-                                <div key={emp.id} className="glass-card" style={{ padding: '14px 16px', opacity: emp.isActive === false ? 0.55 : 1, transition: 'opacity 300ms ease' }}>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                                <div key={emp.id} style={{
+                                    borderRadius: 'var(--radius-xl)',
+                                    background: 'var(--bg-card)',
+                                    border: `1px solid ${isInactive ? 'rgba(244,63,94,0.15)' : 'var(--border-glass)'}`,
+                                    overflow: 'hidden',
+                                    transition: 'all 300ms ease',
+                                    opacity: isInactive ? 0.6 : 1,
+                                    boxShadow: isInactive ? 'none' : '0 2px 12px rgba(0,0,0,0.08)',
+                                }}>
+                                    {/* Top row: Avatar + Name + Actions */}
+                                    <div style={{ padding: '14px 16px 10px', display: 'flex', alignItems: 'center', gap: 12 }}>
+                                        {/* Avatar with gradient ring */}
                                         <div style={{
-                                            width: 44, height: 44, borderRadius: '50%',
-                                            background: color, color: 'white',
-                                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                            fontSize: 15, fontWeight: 800, flexShrink: 0,
+                                            width: 50, height: 50, borderRadius: '50%',
+                                            background: `linear-gradient(135deg, ${color}, ${color}88)`,
+                                            padding: 2.5, flexShrink: 0,
+                                            boxShadow: `0 4px 14px ${color}40`,
                                         }}>
-                                            {initials}
-                                        </div>
-                                        <div style={{ flex: 1 }}>
-                                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
-                                                <span style={{ fontSize: 14, fontWeight: 700 }}>{emp.name}</span>
+                                            <div style={{
+                                                width: '100%', height: '100%', borderRadius: '50%',
+                                                background: 'var(--bg-card)',
+                                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                            }}>
                                                 <span style={{
-                                                    padding: '1px 8px', borderRadius: 'var(--radius-full)',
+                                                    fontSize: 16, fontWeight: 800,
+                                                    background: `linear-gradient(135deg, ${color}, ${color}cc)`,
+                                                    WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
+                                                }}>{initials}</span>
+                                            </div>
+                                        </div>
+                                        {/* Name + Badges */}
+                                        <div style={{ flex: 1, minWidth: 0 }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap', marginBottom: 4 }}>
+                                                <span style={{ fontSize: 15, fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{emp.name}</span>
+                                                <span style={{
+                                                    padding: '2px 8px', borderRadius: 'var(--radius-full)',
                                                     fontSize: 9, fontWeight: 700,
-                                                    background: emp.role === 'admin' ? 'var(--accent-purple-soft)' : 'var(--accent-blue-soft)',
-                                                    color: emp.role === 'admin' ? 'var(--accent-purple)' : 'var(--accent-blue)',
+                                                    background: emp.role === 'admin'
+                                                        ? 'linear-gradient(135deg, rgba(139,92,246,0.15), rgba(168,85,247,0.1))'
+                                                        : 'rgba(59,130,246,0.1)',
+                                                    color: emp.role === 'admin' ? '#a855f7' : 'var(--accent-blue)',
+                                                    border: `1px solid ${emp.role === 'admin' ? 'rgba(139,92,246,0.2)' : 'rgba(59,130,246,0.15)'}`,
                                                 }}>
-                                                    {emp.role === 'admin' ? 'مشرف' : 'موظف'}
+                                                    {emp.role === 'admin' ? '⭐ مشرف' : 'موظف'}
                                                 </span>
+                                            </div>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 5, flexWrap: 'wrap' }}>
                                                 {isEmployeeDeptManager(emp) && (
                                                     <span style={{
-                                                        padding: '1px 8px', borderRadius: 'var(--radius-full)',
+                                                        padding: '2px 8px', borderRadius: 'var(--radius-full)',
                                                         fontSize: 9, fontWeight: 700,
-                                                        background: 'rgba(245,158,11,0.12)',
+                                                        background: 'linear-gradient(135deg, rgba(245,158,11,0.12), rgba(234,88,12,0.08))',
                                                         color: 'var(--accent-amber)',
+                                                        border: '1px solid rgba(245,158,11,0.2)',
                                                         display: 'inline-flex', alignItems: 'center', gap: 3,
                                                     }}>
                                                         <Crown size={9} /> مدير قسم
                                                     </span>
                                                 )}
-                                                {emp.isActive === false && (
+                                                {isInactive && (
                                                     <span style={{
-                                                        padding: '1px 8px', borderRadius: 'var(--radius-full)',
+                                                        padding: '2px 8px', borderRadius: 'var(--radius-full)',
                                                         fontSize: 9, fontWeight: 700,
-                                                        background: 'var(--accent-rose-soft)',
+                                                        background: 'rgba(244,63,94,0.08)',
                                                         color: 'var(--accent-rose)',
+                                                        border: '1px solid rgba(244,63,94,0.15)',
+                                                        display: 'inline-flex', alignItems: 'center', gap: 3,
                                                     }}>
-                                                        معطل
+                                                        ⛔ معطل
                                                     </span>
                                                 )}
+                                                <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>{emp.department}</span>
                                             </div>
-                                            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 2, display: 'flex', gap: 8 }}>
-                                                <span>{emp.department}</span>
-                                                <span>•</span>
-                                                <span style={{ fontFamily: 'var(--font-numeric)' }}>{emp.id}</span>
-                                            </div>
-                                        </div>
-                                        <div style={{ display: 'flex', gap: 6 }}>
-                                            <button onClick={() => handleToggleActive(emp)} title={emp.isActive === false ? 'تفعيل' : 'تعطيل'} style={{
-                                                width: 32, height: 32, borderRadius: 'var(--radius-sm)',
-                                                background: emp.isActive === false ? 'var(--accent-amber-soft)' : 'var(--accent-emerald-soft)',
-                                                color: emp.isActive === false ? 'var(--accent-amber)' : 'var(--accent-emerald)',
-                                                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                            }}>
-                                                {emp.isActive === false ? <ToggleLeft size={14} /> : <ToggleRight size={14} />}
-                                            </button>
-                                            <button onClick={() => startEdit(emp)} style={{
-                                                width: 32, height: 32, borderRadius: 'var(--radius-sm)',
-                                                background: 'var(--accent-blue-soft)', color: 'var(--accent-blue)',
-                                                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                            }}>
-                                                <Edit3 size={14} />
-                                            </button>
-                                            <button onClick={() => checkEmployeeDependencies(emp)} style={{
-                                                width: 32, height: 32, borderRadius: 'var(--radius-sm)',
-                                                background: 'var(--accent-rose-soft)', color: 'var(--accent-rose)',
-                                                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                            }}>
-                                                <Trash2 size={14} />
-                                            </button>
                                         </div>
                                     </div>
 
-                                    {/* Details chips */}
-                                    <div style={{ display: 'flex', gap: 6, marginTop: 10, flexWrap: 'wrap' }}>
-                                        <DetailChip icon={<DollarSign size={11} />} text={formatCurrency(emp.salary)} color="var(--accent-emerald)" />
-                                        <DetailChip icon={<Building2 size={11} />} text={emp.branch} color="var(--accent-teal)" />
-                                        <DetailChip icon={<Clock size={11} />} text={`${emp.shiftStart} - ${emp.shiftEnd}`} color="var(--accent-amber)" numeric />
+                                    {/* Info Grid */}
+                                    <div style={{
+                                        margin: '0 16px', padding: '10px 12px',
+                                        borderRadius: 'var(--radius-lg)',
+                                        background: 'var(--bg-glass)',
+                                        border: '1px solid var(--border-glass)',
+                                        display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px 16px',
+                                    }}>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                            <DollarSign size={12} style={{ color: 'var(--accent-emerald)', flexShrink: 0 }} />
+                                            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>الراتب</span>
+                                            <span style={{ fontSize: 11, fontWeight: 700, fontFamily: 'var(--font-numeric)', marginRight: 'auto', direction: 'ltr' }}>{formatCurrency(emp.salary)}</span>
+                                        </div>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                            <Building2 size={12} style={{ color: 'var(--accent-teal)', flexShrink: 0 }} />
+                                            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>الفرع</span>
+                                            <span style={{ fontSize: 11, fontWeight: 700, marginRight: 'auto' }}>{emp.branch || '—'}</span>
+                                        </div>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                            <Clock size={12} style={{ color: 'var(--accent-amber)', flexShrink: 0 }} />
+                                            <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>الدوام</span>
+                                            <span style={{ fontSize: 11, fontWeight: 700, fontFamily: 'var(--font-numeric)', marginRight: 'auto', direction: 'ltr' }}>{emp.shiftStart} - {emp.shiftEnd}</span>
+                                        </div>
                                         {group && (
-                                            <DetailChip
-                                                icon={<Key size={11} />}
-                                                text={group.name}
-                                                color={group.color}
-                                            />
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                                                <Key size={12} style={{ color: group.color, flexShrink: 0 }} />
+                                                <span style={{ fontSize: 11, color: 'var(--text-muted)' }}>المجموعة</span>
+                                                <span style={{ fontSize: 11, fontWeight: 700, color: group.color, marginRight: 'auto' }}>{group.name}</span>
+                                            </div>
                                         )}
+                                    </div>
+
+                                    {/* Action buttons */}
+                                    <div style={{
+                                        padding: '10px 16px 14px', display: 'flex', gap: 6,
+                                    }}>
+                                        <button onClick={() => handleToggleActive(emp)} style={{
+                                            flex: 1, padding: '8px 0', borderRadius: 'var(--radius-md)',
+                                            background: isInactive ? 'rgba(245,158,11,0.08)' : 'rgba(16,185,129,0.08)',
+                                            color: isInactive ? 'var(--accent-amber)' : 'var(--accent-emerald)',
+                                            border: `1px solid ${isInactive ? 'rgba(245,158,11,0.15)' : 'rgba(16,185,129,0.15)'}`,
+                                            fontSize: 11, fontWeight: 700,
+                                            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+                                            transition: 'all 200ms ease',
+                                        }}>
+                                            {isInactive ? <><ToggleLeft size={13} /> تفعيل</> : <><ToggleRight size={13} /> معطّل</>}
+                                        </button>
+                                        <button onClick={() => startEdit(emp)} style={{
+                                            flex: 1, padding: '8px 0', borderRadius: 'var(--radius-md)',
+                                            background: 'rgba(59,130,246,0.08)',
+                                            color: 'var(--accent-blue)',
+                                            border: '1px solid rgba(59,130,246,0.15)',
+                                            fontSize: 11, fontWeight: 700,
+                                            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+                                            transition: 'all 200ms ease',
+                                        }}>
+                                            <Edit3 size={13} /> تعديل
+                                        </button>
+                                        <button onClick={() => checkEmployeeDependencies(emp)} style={{
+                                            flex: 1, padding: '8px 0', borderRadius: 'var(--radius-md)',
+                                            background: 'rgba(244,63,94,0.06)',
+                                            color: 'var(--accent-rose)',
+                                            border: '1px solid rgba(244,63,94,0.12)',
+                                            fontSize: 11, fontWeight: 700,
+                                            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+                                            transition: 'all 200ms ease',
+                                        }}>
+                                            <Trash2 size={13} /> حذف
+                                        </button>
                                     </div>
 
                                     {/* Delete Confirmation with Dependency Check */}

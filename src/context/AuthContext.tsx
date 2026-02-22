@@ -8,7 +8,7 @@ import {
     onAuthStateChanged,
     User as FirebaseUser,
 } from 'firebase/auth';
-import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { doc, getDoc, setDoc, onSnapshot } from 'firebase/firestore';
 
 interface ProfileUpdate {
     name?: string;
@@ -153,6 +153,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
         return () => unsubscribe();
     }, []);
+
+    // ========== Real-time account monitor ==========
+    // Watch for account deletion or deactivation
+    useEffect(() => {
+        if (!user?.id) return;
+        // Skip if the user logged in via demo (no Firestore doc)
+        const uid = user.id;
+        const unsub = onSnapshot(doc(db, 'users', uid), (snap) => {
+            if (!snap.exists()) {
+                // Account was deleted from Firestore — force logout
+                console.warn('⚠️ Account deleted — logging out');
+                signOut(auth).catch(console.error);
+                setUser(null);
+                setFirebaseUser(null);
+                setIsNewUser(false);
+                setNeedsBiometric(false);
+                localStorage.removeItem('attendance-user');
+                return;
+            }
+            const data = snap.data();
+            if (data && data.isActive === false) {
+                // Account was deactivated — force logout
+                console.warn('⚠️ Account deactivated — logging out');
+                signOut(auth).catch(console.error);
+                setUser(null);
+                setFirebaseUser(null);
+                setIsNewUser(false);
+                setNeedsBiometric(false);
+                localStorage.removeItem('attendance-user');
+            }
+        }, (error) => {
+            console.error('Account monitor error:', error);
+        });
+        return () => unsub();
+    }, [user?.id]);
 
     const login = (phoneOrUsername: string, _password: string): boolean => {
         const found = DEMO_USERS.find(u => u.phone === phoneOrUsername || u.username === phoneOrUsername);
