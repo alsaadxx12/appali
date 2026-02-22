@@ -9,20 +9,18 @@
  */
 
 import * as faceapi from 'face-api.js';
-import { db } from '../firebase';
+import { db, storage } from '../firebase';
 import { doc, setDoc, getDoc } from 'firebase/firestore';
+import { ref, uploadString, getDownloadURL } from 'firebase/storage';
 
 const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights';
 const FACE_KEY = 'face_data_';
 
-// Compress photo for Firestore (small thumbnail to avoid 1MB limit)
-function compressPhotoForFirestore(video: HTMLVideoElement): string {
-    const canvas = document.createElement('canvas');
-    canvas.width = 100;
-    canvas.height = 100;
-    const ctx = canvas.getContext('2d')!;
-    ctx.drawImage(video, 0, 0, 100, 100);
-    return canvas.toDataURL('image/jpeg', 0.3);
+// Upload photo to Firebase Storage and return download URL
+async function uploadPhotoToStorage(userId: string, type: 'face' | 'iris', base64Photo: string): Promise<string> {
+    const storageRef = ref(storage, `biometrics/${userId}/${type}.jpg`);
+    await uploadString(storageRef, base64Photo, 'data_url');
+    return await getDownloadURL(storageRef);
 }
 
 let modelsLoaded = false;
@@ -267,20 +265,22 @@ export async function registerFace(
             frameCount: descriptors.length,
         }));
 
-        // Store in Firestore
+        // Upload photo to Firebase Storage & save data to Firestore
         try {
-            const firestorePhoto = compressPhotoForFirestore(video);
-            console.log('💾 Saving face to Firestore for user:', userId);
+            console.log('💾 Uploading face photo to Storage for user:', userId);
+            const photoURL = await uploadPhotoToStorage(userId, 'face', photo);
+            console.log('✅ Face photo uploaded to Storage');
+
             await setDoc(doc(db, 'users', userId, 'biometrics', 'face'), {
                 descriptor: Array.from(avgDescriptor),
-                photo: firestorePhoto,
+                photoURL,
                 registeredAt: new Date().toISOString(),
                 frameCount: descriptors.length,
                 locked: true,
             });
-            console.log('✅ Face saved to Firestore successfully');
+            console.log('✅ Face data saved to Firestore successfully');
         } catch (e: any) {
-            console.error('❌ Failed to save face to Firestore:', e?.message || e);
+            console.error('❌ Failed to save face to Storage/Firestore:', e?.message || e);
         }
 
         onProgress?.('تم!', 100);
@@ -572,22 +572,24 @@ export async function registerIris(
             frameCount: allLeftSigs.length,
         }));
 
-        // Store in Firestore
+        // Upload photo to Firebase Storage & save data to Firestore
         try {
-            const firestorePhoto = compressPhotoForFirestore(video);
-            console.log('💾 Saving iris to Firestore for user:', userId);
+            console.log('💾 Uploading iris photo to Storage for user:', userId);
+            const photoURL = await uploadPhotoToStorage(userId, 'iris', photo);
+            console.log('✅ Iris photo uploaded to Storage');
+
             await setDoc(doc(db, 'users', userId, 'biometrics', 'iris'), {
                 leftEye: Array.from(avgLeft),
                 rightEye: Array.from(avgRight),
                 faceDescriptor: Array.from(avgDesc),
-                photo: firestorePhoto,
+                photoURL,
                 registeredAt: new Date().toISOString(),
                 frameCount: allLeftSigs.length,
                 locked: true,
             });
-            console.log('✅ Iris saved to Firestore successfully');
+            console.log('✅ Iris data saved to Firestore successfully');
         } catch (e: any) {
-            console.error('❌ Failed to save iris to Firestore:', e?.message || e);
+            console.error('❌ Failed to save iris to Storage/Firestore:', e?.message || e);
         }
 
         onProgress?.('تم التسجيل!', 100);
