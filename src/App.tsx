@@ -14,6 +14,7 @@ import NotificationInboxPage from './pages/NotificationInboxPage';
 import Header from './components/Header';
 import BottomNav from './components/BottomNav';
 import PullToRefresh from './components/PullToRefresh';
+import InstallPrompt from './components/InstallPrompt';
 import { PageType } from './types';
 
 function AppContent() {
@@ -127,6 +128,7 @@ function AppInner({
                     </div>
                 </PullToRefresh>
                 <BottomNav currentPage={currentPage} onPageChange={handlePageChange} />
+                <InstallPrompt />
             </div>
             <style>{`
                 @keyframes pageIn {
