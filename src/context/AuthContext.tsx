@@ -21,11 +21,13 @@ interface AuthContextType {
     firebaseUser: FirebaseUser | null;
     isAuthenticated: boolean;
     isNewUser: boolean;
+    needsBiometric: boolean;
     login: (username: string, password: string) => boolean;
     loginWithGoogle: () => Promise<{ success: boolean; error?: string }>;
     registerWithGoogle: () => Promise<{ success: boolean; error?: string }>;
     updateProfile: (data: ProfileUpdate) => Promise<void>;
     markProfileComplete: () => void;
+    markBiometricComplete: () => void;
     logout: () => void;
     loading: boolean;
 }
@@ -89,6 +91,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
     const [loading, setLoading] = useState(true);
     const [isNewUser, setIsNewUser] = useState(false);
+    const [needsBiometric, setNeedsBiometric] = useState(false);
     // Guard: skip onAuthStateChanged during login eligibility check
     const loginCheckRef = React.useRef(false);
 
@@ -107,11 +110,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 // Show profile completion if not marked complete
                 if (firestoreData && !firestoreData.profileComplete) {
                     setIsNewUser(true);
+                    setNeedsBiometric(false);
+                } else if (firestoreData && firestoreData.profileComplete && !firestoreData.biometricComplete) {
+                    setIsNewUser(false);
+                    setNeedsBiometric(true);
                 } else if (!firestoreData) {
                     // No Firestore doc = unregistered, sign out
                     setIsNewUser(false);
+                    setNeedsBiometric(false);
                 } else {
                     setIsNewUser(false);
+                    setNeedsBiometric(false);
                 }
             } else {
                 const savedUser = localStorage.getItem('attendance-user');
@@ -261,10 +270,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // ========== Mark Profile Complete ==========
     const markProfileComplete = async () => {
         setIsNewUser(false);
+        setNeedsBiometric(true);
         if (user) {
             const saved = await saveUserToFirestore(user.id, { profileComplete: true });
             if (!saved) {
                 console.error('❌ Failed to mark profile complete in Firestore');
+            }
+        }
+    };
+
+    // ========== Mark Biometric Complete ==========
+    const markBiometricComplete = async () => {
+        setNeedsBiometric(false);
+        if (user) {
+            const saved = await saveUserToFirestore(user.id, { biometricComplete: true });
+            if (!saved) {
+                console.error('❌ Failed to mark biometric complete in Firestore');
             }
         }
     };
@@ -274,6 +295,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(null);
         setFirebaseUser(null);
         setIsNewUser(false);
+        setNeedsBiometric(false);
         localStorage.removeItem('attendance-user');
     };
 
@@ -283,11 +305,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             firebaseUser,
             isAuthenticated: !!user,
             isNewUser,
+            needsBiometric,
             login,
             loginWithGoogle,
             registerWithGoogle,
             updateProfile,
             markProfileComplete,
+            markBiometricComplete,
             logout,
             loading,
         }}>

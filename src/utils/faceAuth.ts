@@ -9,6 +9,8 @@
  */
 
 import * as faceapi from 'face-api.js';
+import { db } from '../firebase';
+import { doc, setDoc, getDoc } from 'firebase/firestore';
 
 const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights';
 const FACE_KEY = 'face_data_';
@@ -247,13 +249,26 @@ export async function registerFace(
         canvas.getContext('2d')!.drawImage(video, 0, 0);
         const photo = canvas.toDataURL('image/jpeg', 0.6);
 
-        // Store
+        // Store locally
         localStorage.setItem(FACE_KEY + userId, JSON.stringify({
             descriptor: Array.from(avgDescriptor),
             photo,
             registeredAt: new Date().toISOString(),
             frameCount: descriptors.length,
         }));
+
+        // Store in Firestore
+        try {
+            await setDoc(doc(db, 'users', userId, 'biometrics', 'face'), {
+                descriptor: Array.from(avgDescriptor),
+                photo,
+                registeredAt: new Date().toISOString(),
+                frameCount: descriptors.length,
+                locked: true,
+            });
+        } catch (e) {
+            console.error('Failed to save face to Firestore:', e);
+        }
 
         onProgress?.('تم!', 100);
         return { success: true, photo };
@@ -534,6 +549,7 @@ export async function registerIris(
 
         onProgress?.('حفظ بيانات القزحية...', 90);
 
+        // Store locally
         localStorage.setItem(IRIS_KEY + userId, JSON.stringify({
             leftEye: Array.from(avgLeft),
             rightEye: Array.from(avgRight),
@@ -542,6 +558,21 @@ export async function registerIris(
             registeredAt: new Date().toISOString(),
             frameCount: allLeftSigs.length,
         }));
+
+        // Store in Firestore
+        try {
+            await setDoc(doc(db, 'users', userId, 'biometrics', 'iris'), {
+                leftEye: Array.from(avgLeft),
+                rightEye: Array.from(avgRight),
+                faceDescriptor: Array.from(avgDesc),
+                photo,
+                registeredAt: new Date().toISOString(),
+                frameCount: allLeftSigs.length,
+                locked: true,
+            });
+        } catch (e) {
+            console.error('Failed to save iris to Firestore:', e);
+        }
 
         onProgress?.('تم التسجيل!', 100);
         return { success: true, photo };
@@ -618,4 +649,41 @@ export function getIrisPhoto(userId: string): string | null {
 
 export function removeIrisData(userId: string): void {
     localStorage.removeItem(IRIS_KEY + userId);
+}
+
+// ============================================================
+// Firestore Biometric Helpers
+// ============================================================
+
+export async function isBiometricRegisteredInFirestore(
+    userId: string,
+    type: 'face' | 'iris'
+): Promise<boolean> {
+    try {
+        const snap = await getDoc(doc(db, 'users', userId, 'biometrics', type));
+        return snap.exists() && snap.data()?.locked === true;
+    } catch {
+        return false;
+    }
+}
+
+export async function loadBiometricFromFirestore(
+    userId: string,
+    type: 'face' | 'iris'
+): Promise<Record<string, any> | null> {
+    try {
+        const snap = await getDoc(doc(db, 'users', userId, 'biometrics', type));
+        if (snap.exists()) return snap.data();
+    } catch (e) {
+        console.error(`Failed to load ${type} from Firestore:`, e);
+    }
+    return null;
+}
+
+export async function checkBothBiometricsRegistered(userId: string): Promise<boolean> {
+    const [face, iris] = await Promise.all([
+        isBiometricRegisteredInFirestore(userId, 'face'),
+        isBiometricRegisteredInFirestore(userId, 'iris'),
+    ]);
+    return face && iris;
 }

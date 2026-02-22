@@ -4,6 +4,7 @@ import { ThemeProvider } from './context/ThemeContext';
 import { AttendanceProvider, useAttendance } from './context/AttendanceContext';
 import LoginPage from './pages/LoginPage';
 import ProfileCompletionPage from './pages/ProfileCompletionPage';
+import BiometricRegistrationPage from './pages/BiometricRegistrationPage';
 import HomePage from './pages/HomePage';
 import HistoryPage from './pages/HistoryPage';
 import VipPage from './pages/VipPage';
@@ -18,7 +19,7 @@ import InstallPrompt from './components/InstallPrompt';
 import { PageType } from './types';
 
 function AppContent() {
-    const { isAuthenticated, loading, isNewUser, markProfileComplete } = useAuth();
+    const { isAuthenticated, loading, isNewUser, needsBiometric, markProfileComplete, markBiometricComplete } = useAuth();
     const [currentPage, setCurrentPage] = useState<PageType>('home');
     const [refreshKey, setRefreshKey] = useState(0);
 
@@ -47,6 +48,13 @@ function AppContent() {
     if (isNewUser) {
         return <ProfileCompletionPage onComplete={() => {
             markProfileComplete();
+            setCurrentPage('home');
+        }} />;
+    }
+
+    if (needsBiometric) {
+        return <BiometricRegistrationPage onComplete={() => {
+            markBiometricComplete();
             setCurrentPage('home');
         }} />;
     }

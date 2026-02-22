@@ -23,6 +23,8 @@ import {
     getIrisPhoto,
     registerIris,
     removeIrisData,
+    isBiometricRegisteredInFirestore,
+    loadBiometricFromFirestore,
 } from '../../utils/faceAuth';
 
 interface Props {
@@ -58,6 +60,10 @@ export default function BiometricSettingsPage({ onBack }: Props) {
     const irisVideoRef = useRef<HTMLVideoElement>(null);
     const irisStreamRef = useRef<MediaStream | null>(null);
 
+    // Locked state (from Firestore)
+    const [faceLocked, setFaceLocked] = useState(false);
+    const [irisLocked, setIrisLocked] = useState(false);
+
     useEffect(() => { init(); }, []);
 
     // Cleanup cameras
@@ -78,10 +84,40 @@ export default function BiometricSettingsPage({ onBack }: Props) {
             setDeviceSupported(supported);
             setSettings(savedSettings);
             if (userId) {
-                setHasFace(isFaceRegistered(userId));
-                setFacePhoto(getFacePhoto(userId));
-                setHasIris(isIrisRegistered(userId));
-                setIrisPhoto(getIrisPhoto(userId));
+                // Check Firestore lock status
+                const [faceLockedFS, irisLockedFS] = await Promise.all([
+                    isBiometricRegisteredInFirestore(userId, 'face'),
+                    isBiometricRegisteredInFirestore(userId, 'iris'),
+                ]);
+                setFaceLocked(faceLockedFS);
+                setIrisLocked(irisLockedFS);
+
+                // Try local first, then Firestore for photos
+                let localFace = isFaceRegistered(userId);
+                let localFacePhoto = getFacePhoto(userId);
+                let localIris = isIrisRegistered(userId);
+                let localIrisPhoto = getIrisPhoto(userId);
+
+                // If not in local but in Firestore, load from Firestore
+                if (!localFace && faceLockedFS) {
+                    const faceData = await loadBiometricFromFirestore(userId, 'face');
+                    if (faceData) {
+                        localFace = true;
+                        localFacePhoto = faceData.photo || null;
+                    }
+                }
+                if (!localIris && irisLockedFS) {
+                    const irisData = await loadBiometricFromFirestore(userId, 'iris');
+                    if (irisData) {
+                        localIris = true;
+                        localIrisPhoto = irisData.photo || null;
+                    }
+                }
+
+                setHasFace(localFace);
+                setFacePhoto(localFacePhoto);
+                setHasIris(localIris);
+                setIrisPhoto(localIrisPhoto);
             }
         } catch (e) {
             console.error('Error initializing:', e);
@@ -430,28 +466,43 @@ export default function BiometricSettingsPage({ onBack }: Props) {
                             </div>
                         </div>
                         <div style={{ display: 'flex', gap: 6 }}>
-                            <button
-                                onClick={handleOpenCamera}
-                                style={{
-                                    padding: '8px', borderRadius: 'var(--radius-sm)',
-                                    background: 'rgba(59,130,246,0.1)', border: 'none',
-                                    color: 'var(--accent-blue)', cursor: 'pointer',
-                                }}
-                                title="إعادة التسجيل"
-                            >
-                                <Camera size={16} />
-                            </button>
-                            <button
-                                onClick={handleRemoveFace}
-                                style={{
-                                    padding: '8px', borderRadius: 'var(--radius-sm)',
-                                    background: 'rgba(244,63,94,0.1)', border: 'none',
-                                    color: 'var(--accent-rose)', cursor: 'pointer',
-                                }}
-                                title="حذف"
-                            >
-                                <Trash2 size={16} />
-                            </button>
+                            {faceLocked ? (
+                                <div style={{
+                                    padding: '6px 10px', borderRadius: 'var(--radius-sm)',
+                                    background: 'rgba(244,63,94,0.08)',
+                                    color: 'var(--accent-rose)',
+                                    fontSize: 10, fontWeight: 700,
+                                    display: 'flex', alignItems: 'center', gap: 4,
+                                }}>
+                                    <Lock size={12} />
+                                    مقفل
+                                </div>
+                            ) : (
+                                <>
+                                    <button
+                                        onClick={handleOpenCamera}
+                                        style={{
+                                            padding: '8px', borderRadius: 'var(--radius-sm)',
+                                            background: 'rgba(59,130,246,0.1)', border: 'none',
+                                            color: 'var(--accent-blue)', cursor: 'pointer',
+                                        }}
+                                        title="\u0625\u0639\u0627\u062f\u0629 \u0627\u0644\u062a\u0633\u062c\u064a\u0644"
+                                    >
+                                        <Camera size={16} />
+                                    </button>
+                                    <button
+                                        onClick={handleRemoveFace}
+                                        style={{
+                                            padding: '8px', borderRadius: 'var(--radius-sm)',
+                                            background: 'rgba(244,63,94,0.1)', border: 'none',
+                                            color: 'var(--accent-rose)', cursor: 'pointer',
+                                        }}
+                                        title="\u062d\u0630\u0641"
+                                    >
+                                        <Trash2 size={16} />
+                                    </button>
+                                </>
+                            )}
                         </div>
                     </div>
                 ) : !showCamera && (
@@ -589,28 +640,43 @@ export default function BiometricSettingsPage({ onBack }: Props) {
                             </div>
                         </div>
                         <div style={{ display: 'flex', gap: 6 }}>
-                            <button
-                                onClick={handleOpenIrisCamera}
-                                style={{
-                                    padding: '8px', borderRadius: 'var(--radius-sm)',
-                                    background: 'rgba(139,92,246,0.1)', border: 'none',
-                                    color: '#8b5cf6', cursor: 'pointer',
-                                }}
-                                title="إعادة التسجيل"
-                            >
-                                <Eye size={16} />
-                            </button>
-                            <button
-                                onClick={handleRemoveIris}
-                                style={{
-                                    padding: '8px', borderRadius: 'var(--radius-sm)',
-                                    background: 'rgba(244,63,94,0.1)', border: 'none',
-                                    color: 'var(--accent-rose)', cursor: 'pointer',
-                                }}
-                                title="حذف"
-                            >
-                                <Trash2 size={16} />
-                            </button>
+                            {irisLocked ? (
+                                <div style={{
+                                    padding: '6px 10px', borderRadius: 'var(--radius-sm)',
+                                    background: 'rgba(244,63,94,0.08)',
+                                    color: 'var(--accent-rose)',
+                                    fontSize: 10, fontWeight: 700,
+                                    display: 'flex', alignItems: 'center', gap: 4,
+                                }}>
+                                    <Lock size={12} />
+                                    مقفل
+                                </div>
+                            ) : (
+                                <>
+                                    <button
+                                        onClick={handleOpenIrisCamera}
+                                        style={{
+                                            padding: '8px', borderRadius: 'var(--radius-sm)',
+                                            background: 'rgba(139,92,246,0.1)', border: 'none',
+                                            color: '#8b5cf6', cursor: 'pointer',
+                                        }}
+                                        title="\u0625\u0639\u0627\u062f\u0629 \u0627\u0644\u062a\u0633\u062c\u064a\u0644"
+                                    >
+                                        <Eye size={16} />
+                                    </button>
+                                    <button
+                                        onClick={handleRemoveIris}
+                                        style={{
+                                            padding: '8px', borderRadius: 'var(--radius-sm)',
+                                            background: 'rgba(244,63,94,0.1)', border: 'none',
+                                            color: 'var(--accent-rose)', cursor: 'pointer',
+                                        }}
+                                        title="\u062d\u0630\u0641"
+                                    >
+                                        <Trash2 size={16} />
+                                    </button>
+                                </>
+                            )}
                         </div>
                     </div>
                 ) : !showIrisCamera && (
