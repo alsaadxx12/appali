@@ -70,7 +70,8 @@ export default function ChatPage({ onBack }: Props) {
         // Query WITHOUT orderBy to avoid composite index requirement
         const q = query(collection(db, 'conversations'), where('participants', 'array-contains', uid));
         const u = onSnapshot(q, s => {
-            const data = s.docs.map(d => ({ id: d.id, ...d.data() } as Conversation));
+            const data = s.docs.map(d => ({ id: d.id, ...d.data() } as Conversation))
+                .filter(c => !(c as any).deletedFor?.[uid]);
             // Sort client-side by lastMessageAt descending
             data.sort((a, b) => {
                 const at = a.lastMessageAt?.toMillis?.() || 0;
@@ -148,15 +149,19 @@ export default function ChatPage({ onBack }: Props) {
 
     const doEdit = async () => { if (!editMsg || !editTxt.trim() || !activeChat) return; try { await updateDoc(doc(db, 'conversations', activeChat.convId, 'messages', editMsg.id), { text: editTxt.trim(), edited: true }); await setDoc(doc(db, 'conversations', activeChat.convId), { lastMessage: editTxt.trim() }, { merge: true }); } catch (e) { } setEditMsg(null); setEditTxt(''); };
     const doDelete = async (m: Message) => { if (!activeChat) return; try { await updateDoc(doc(db, 'conversations', activeChat.convId, 'messages', m.id), { deleted: true, text: 'تم حذف هذه الرسالة' }); } catch (e) { } setCtxMsg(null); };
-    const deleteConv = async (id: string) => {
+    const deleteConvForMe = async (id: string) => {
         try {
-            // Delete all messages in subcollection first
+            await updateDoc(doc(db, 'conversations', id), { [`deletedFor.${uid}`]: true });
+        } catch (e) { console.error(e); }
+        setDeleteConfirm(null);
+        if (activeChat?.convId === id) setActiveChat(null);
+    };
+    const deleteConvForBoth = async (id: string) => {
+        try {
             const msgsSnap = await getDocs(collection(db, 'conversations', id, 'messages'));
-            const deletePromises = msgsSnap.docs.map(d => deleteDoc(doc(db, 'conversations', id, 'messages', d.id)));
-            await Promise.all(deletePromises);
-            // Then delete the conversation document
+            await Promise.all(msgsSnap.docs.map(d => deleteDoc(doc(db, 'conversations', id, 'messages', d.id))));
             await deleteDoc(doc(db, 'conversations', id));
-        } catch (e) { console.error('Delete conv error:', e); }
+        } catch (e) { console.error(e); }
         setDeleteConfirm(null);
         if (activeChat?.convId === id) setActiveChat(null);
     };
@@ -180,14 +185,14 @@ export default function ChatPage({ onBack }: Props) {
             <div className="page-content page-enter chat-root" style={{ display: 'flex', flexDirection: 'column', height: 'calc(100dvh - var(--nav-height, 60px) - 60px)', padding: 0, overflow: 'hidden', position: 'relative', width: '100%', maxWidth: '100vw' }}>
                 <style>{css}</style>
                 {/* Top header */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '12px 16px', borderBottom: '1px solid var(--border-glass)', background: 'var(--bg-glass)', backdropFilter: 'blur(20px)', flexShrink: 0 }}>
-                    <button onClick={() => { setActiveChat(null); setShowEmoji(false); setEditMsg(null); setShowAttach(false); }} style={{ width: 36, height: 36, borderRadius: 'var(--radius-md)', background: 'var(--bg-glass)', border: '1px solid var(--border-glass)', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer' }}><ArrowRight size={18} /></button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderBottom: '1px solid var(--border-glass)', background: 'linear-gradient(180deg, var(--bg-card), var(--bg-glass))', backdropFilter: 'blur(20px)', flexShrink: 0 }}>
+                    <button onClick={() => { setActiveChat(null); setShowEmoji(false); setEditMsg(null); setShowAttach(false); }} style={{ width: 36, height: 36, borderRadius: 10, background: 'var(--bg-glass)', border: '1px solid var(--border-glass)', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}><ArrowRight size={18} /></button>
                     <div style={{ position: 'relative', flexShrink: 0 }}>
-                        <div style={{ width: 42, height: 42, borderRadius: '50%', background: otherUser.avatar ? `url(${otherUser.avatar}) center/cover` : 'linear-gradient(135deg,#10b981,#3b82f6)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: 14, fontWeight: 800, backgroundSize: 'cover' }}>{!otherUser.avatar && gi(otherUser.name)}</div>
-                        <div style={{ position: 'absolute', bottom: 1, right: 1, width: 12, height: 12, borderRadius: '50%', background: otherOnline ? '#22c55e' : '#6b7280', border: '2.5px solid var(--bg-primary)' }} />
+                        <div style={{ width: 40, height: 40, borderRadius: '50%', background: otherUser.avatar ? `url(${otherUser.avatar}) center/cover` : 'linear-gradient(135deg,#10b981,#3b82f6)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: 14, fontWeight: 800, backgroundSize: 'cover', border: otherOnline ? '2px solid #22c55e' : '2px solid transparent', boxShadow: otherOnline ? '0 0 10px rgba(34,197,94,.3)' : 'none' }}>{!otherUser.avatar && gi(otherUser.name)}</div>
+                        <div style={{ position: 'absolute', bottom: 0, right: 0, width: 11, height: 11, borderRadius: '50%', background: otherOnline ? '#22c55e' : '#6b7280', border: '2px solid var(--bg-card)' }} />
                     </div>
-                    <div style={{ flex: 1 }}>
-                        <div style={{ fontSize: 15, fontWeight: 800 }}>{otherUser.name}</div>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 15, fontWeight: 800, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{otherUser.name}</div>
                         <div style={{ fontSize: 11, color: otherOnline ? '#22c55e' : 'var(--text-muted)', fontWeight: 700 }}>{otherOnline ? '🟢 متصل الآن' : fls(otherLastSeen)}</div>
                     </div>
                     <div style={{ position: 'relative' }}>
@@ -288,10 +293,10 @@ export default function ChatPage({ onBack }: Props) {
     return (
         <div className="page-content page-enter chat-root" style={{ overscrollBehavior: 'contain' }}>
             <style>{css}</style>
-            {/* Header with back button and title */}
-            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 16, padding: '0 2px' }}>
-                <button onClick={onBack} style={{ width: 38, height: 38, borderRadius: 'var(--radius-md)', background: 'var(--bg-glass)', border: '1px solid var(--border-glass)', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0 }}><ArrowRight size={18} /></button>
-                <div style={{ flex: 1 }}><h2 style={{ fontSize: 20, fontWeight: 900, margin: 0 }}>المحادثات</h2><p style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600, margin: 0 }}>تواصل مع زملائك</p></div>
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 18, padding: '0 2px' }}>
+                <button onClick={onBack} style={{ width: 38, height: 38, borderRadius: 12, background: 'var(--bg-glass)', border: '1px solid var(--border-glass)', color: 'var(--text-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', flexShrink: 0, transition: 'all .2s' }}><ArrowRight size={18} /></button>
+                <div style={{ flex: 1 }}><h2 style={{ fontSize: 22, fontWeight: 900, margin: 0, background: 'linear-gradient(135deg,#3b82f6,#8b5cf6)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent' }}>المحادثات</h2><p style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600, margin: 0 }}>تواصل مع زملائك</p></div>
             </div>
 
             {/* Employees */}
@@ -339,7 +344,7 @@ export default function ChatPage({ onBack }: Props) {
                                             </div>
                                             <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                                                 <div style={{ fontSize: 13, color: unread ? 'var(--text-primary)' : 'var(--text-muted)', fontWeight: unread ? 700 : 500, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', flex: 1 }}>{c.lastMessage || 'لا توجد رسائل بعد'}</div>
-                                                {unread && <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#3b82f6', flexShrink: 0 }} />}
+                                                {unread && <div style={{ minWidth: 10, height: 10, borderRadius: '50%', background: 'linear-gradient(135deg,#3b82f6,#6366f1)', flexShrink: 0, boxShadow: '0 0 8px rgba(59,130,246,.5)' }} />}
                                             </div>
                                         </div>
                                     </button>
@@ -353,13 +358,14 @@ export default function ChatPage({ onBack }: Props) {
                         })}
                     </div>}
 
-            {deleteConfirm && <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, background: 'rgba(0,0,0,.6)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20 }} onClick={() => setDeleteConfirm(null)}><div onClick={e => e.stopPropagation()} style={{ background: 'var(--bg-card)', borderRadius: 'var(--radius-xl)', padding: 26, maxWidth: 320, width: '100%', textAlign: 'center', boxShadow: '0 16px 48px rgba(0,0,0,.3)' }}>
-                <Trash2 size={34} style={{ color: '#f43f5e', margin: '0 auto 14px' }} />
-                <div style={{ fontSize: 17, fontWeight: 800, marginBottom: 8 }}>حذف المحادثة؟</div>
-                <div style={{ fontSize: 13, color: 'var(--text-muted)', fontWeight: 600, marginBottom: 22 }}>سيتم حذف المحادثة نهائياً</div>
-                <div style={{ display: 'flex', gap: 10 }}>
-                    <button onClick={() => setDeleteConfirm(null)} style={{ flex: 1, padding: '11px 16px', borderRadius: 'var(--radius-lg)', background: 'var(--bg-glass)', border: '1px solid var(--border-glass)', color: 'var(--text-primary)', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-arabic)' }}>إلغاء</button>
-                    <button onClick={() => deleteConv(deleteConfirm)} style={{ flex: 1, padding: '11px 16px', borderRadius: 'var(--radius-lg)', background: 'linear-gradient(135deg,#ef4444,#dc2626)', border: 'none', color: 'white', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-arabic)', boxShadow: '0 4px 14px rgba(239,68,68,.3)' }}>حذف</button>
+            {deleteConfirm && <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, width: '100vw', height: '100dvh', background: 'rgba(0,0,0,.7)', backdropFilter: 'blur(6px)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }} onClick={() => setDeleteConfirm(null)}><div onClick={e => e.stopPropagation()} style={{ background: 'var(--bg-card)', borderRadius: 20, padding: '30px 24px', maxWidth: 340, width: '100%', textAlign: 'center', boxShadow: '0 20px 60px rgba(0,0,0,.4)', animation: 'fadeUp .2s ease', border: '1px solid var(--border-glass)' }}>
+                <div style={{ width: 56, height: 56, borderRadius: '50%', background: 'rgba(244,63,94,.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}><Trash2 size={26} style={{ color: '#f43f5e' }} /></div>
+                <div style={{ fontSize: 18, fontWeight: 900, marginBottom: 6 }}>حذف المحادثة</div>
+                <div style={{ fontSize: 13, color: 'var(--text-muted)', fontWeight: 600, marginBottom: 24, lineHeight: 1.6 }}>اختر طريقة حذف المحادثة</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                    <button onClick={() => deleteConvForMe(deleteConfirm)} style={{ padding: '13px 16px', borderRadius: 14, background: 'var(--bg-glass)', border: '1px solid var(--border-glass)', color: 'var(--text-primary)', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-arabic)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, transition: 'all .15s' }}>🗑️ حذف لدي فقط</button>
+                    <button onClick={() => deleteConvForBoth(deleteConfirm)} style={{ padding: '13px 16px', borderRadius: 14, background: 'linear-gradient(135deg,#ef4444,#dc2626)', border: 'none', color: 'white', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-arabic)', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8, boxShadow: '0 4px 16px rgba(239,68,68,.3)', transition: 'all .15s' }}>⚠️ حذف من الطرفين</button>
+                    <button onClick={() => setDeleteConfirm(null)} style={{ padding: '11px 16px', borderRadius: 14, background: 'transparent', border: 'none', color: 'var(--text-muted)', fontSize: 14, fontWeight: 700, cursor: 'pointer', fontFamily: 'var(--font-arabic)', marginTop: 4 }}>إلغاء</button>
                 </div>
             </div></div>}
 
