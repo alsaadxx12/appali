@@ -96,11 +96,14 @@ export default function HomePage() {
             setBiometricLoading(true);
             try {
                 const settings = await getBiometricSettings();
+                console.log('🔐 Biometric settings loaded:', JSON.stringify(settings));
                 setBiometricSettings(settings);
                 // Preload biometric data from Firestore into localStorage
                 if (user?.id) {
                     await ensureBiometricDataLoaded(user.id);
-                    setHasFace(isFaceRegistered(user.id));
+                    const hasFaceReg = isFaceRegistered(user.id);
+                    console.log('🔐 Face registered:', hasFaceReg);
+                    setHasFace(hasFaceReg);
                 }
             } finally {
                 setBiometricLoading(false);

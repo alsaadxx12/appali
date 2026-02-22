@@ -30,8 +30,9 @@ const DEFAULT_ADJUSTMENT: FrameAdjustment = {
     avatarScale: 0.75,
 };
 
-import { db } from '../../firebase';
+import { db, storage } from '../../firebase';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
+import { ref, uploadString, getDownloadURL } from 'firebase/storage';
 
 interface VipLevelData {
     id: string;
@@ -149,25 +150,65 @@ export default function FrameSettingsPage({ onBack }: Props) {
         setSelectingLevel(null);
     };
 
+    const [saving, setSaving] = useState(false);
+
     const handleSave = async () => {
+        setSaving(true);
         try {
+            // Upload base64 images to Firebase Storage and replace with download URLs
+            const uploadedFrames: FrameItem[] = await Promise.all(
+                frames.map(async (frame) => {
+                    // Skip if already a URL (not base64)
+                    if (frame.imageUrl && !frame.imageUrl.startsWith('data:')) {
+                        return frame;
+                    }
+                    // Upload base64 to Storage
+                    if (frame.imageUrl && frame.imageUrl.startsWith('data:')) {
+                        try {
+                            const storageRef = ref(storage, `frames/${frame.id}`);
+                            await uploadString(storageRef, frame.imageUrl, 'data_url');
+                            const downloadUrl = await getDownloadURL(storageRef);
+                            return { ...frame, imageUrl: downloadUrl };
+                        } catch (uploadErr) {
+                            console.error(`Failed to upload frame ${frame.id}:`, uploadErr);
+                            // Keep base64 as fallback for localStorage
+                            return frame;
+                        }
+                    }
+                    return frame;
+                })
+            );
+
+            // Save metadata (with Storage URLs) to Firestore
+            // Strip base64 data for Firestore — only keep URL-based frames
+            const firestoreFrames = uploadedFrames.map(f => ({
+                ...f,
+                imageUrl: f.imageUrl?.startsWith('data:') ? '' : f.imageUrl,
+            }));
+
             await setDoc(doc(db, 'settings', 'frames'), {
-                frames,
+                frames: firestoreFrames,
                 levelFrames,
                 adjustments,
                 updatedAt: new Date().toISOString(),
             });
-            // Also save to localStorage as cache
-            localStorage.setItem('vipFrames', JSON.stringify(frames));
+
+            // Update local state with uploaded URLs
+            setFrames(uploadedFrames);
+
+            // Also save to localStorage as cache (with full URLs)
+            localStorage.setItem('vipFrames', JSON.stringify(uploadedFrames));
             localStorage.setItem('vipLevelFrames', JSON.stringify(levelFrames));
             localStorage.setItem('vipFrameAdjustments', JSON.stringify(adjustments));
             // Invalidate VipFrame cache so all components reload
             invalidateFrameCache();
             setSaved(true);
             setTimeout(() => setSaved(false), 2000);
-        } catch (e) {
+        } catch (e: any) {
             console.error('Error saving frame settings:', e);
-            alert('حدث خطأ أثناء الحفظ');
+            alert(`حدث خطأ أثناء الحفظ: ${e?.message || e}`);
+        } finally {
+            setSaving(false);
         }
     };
 
@@ -459,17 +500,19 @@ export default function FrameSettingsPage({ onBack }: Props) {
                                         </button>
                                         <button
                                             onClick={handleSave}
+                                            disabled={saving}
                                             style={{
                                                 flex: 1, padding: '10px', borderRadius: 'var(--radius-md)',
-                                                background: saved ? 'rgba(34,197,94,0.2)' : `${lvl.color}20`,
-                                                color: saved ? '#22c55e' : lvl.color, fontSize: 11, fontWeight: 700,
+                                                background: saved ? 'rgba(34,197,94,0.2)' : saving ? 'rgba(255,255,255,0.05)' : `${lvl.color}20`,
+                                                color: saved ? '#22c55e' : saving ? 'var(--text-muted)' : lvl.color, fontSize: 11, fontWeight: 700,
                                                 display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
                                                 border: saved ? '1px solid rgba(34,197,94,0.3)' : `1px solid ${lvl.color}30`,
                                                 transition: 'all 0.3s ease',
+                                                opacity: saving ? 0.6 : 1,
                                             }}
                                         >
-                                            {saved ? <Check size={14} /> : <Save size={14} />}
-                                            {saved ? 'تم الحفظ ✓' : 'حفظ الضبط'}
+                                            {saving ? '⏳' : saved ? <Check size={14} /> : <Save size={14} />}
+                                            {saving ? 'جاري الحفظ...' : saved ? 'تم الحفظ ✓' : 'حفظ الضبط'}
                                         </button>
                                     </div>
                                 </div>
@@ -826,17 +869,21 @@ export default function FrameSettingsPage({ onBack }: Props) {
             {/* Save Button */}
             <button
                 onClick={handleSave}
+                disabled={saving}
                 style={{
                     width: '100%', padding: '14px', borderRadius: 'var(--radius-lg)',
                     background: saved
                         ? 'linear-gradient(135deg, var(--accent-emerald), var(--accent-teal))'
-                        : 'linear-gradient(135deg, var(--accent-purple), var(--accent-blue))',
-                    color: 'white', fontSize: 14, fontWeight: 800,
+                        : saving
+                            ? 'rgba(255,255,255,0.08)'
+                            : 'linear-gradient(135deg, var(--accent-purple), var(--accent-blue))',
+                    color: saving ? 'var(--text-muted)' : 'white', fontSize: 14, fontWeight: 800,
                     marginBottom: 100, transition: 'all 300ms ease',
                     display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                    opacity: saving ? 0.7 : 1,
                 }}
             >
-                {saved ? '✓ تم الحفظ بنجاح' : 'حفظ التعيينات'}
+                {saving ? '⏳ جاري رفع الإطارات وحفظ الإعدادات...' : saved ? '✓ تم الحفظ بنجاح' : 'حفظ التعيينات'}
             </button>
 
             {/* Delete Confirmation */}
