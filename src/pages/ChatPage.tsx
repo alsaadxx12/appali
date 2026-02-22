@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { ArrowRight, Send, Search, Users, MessageCircle, Loader2, Smile, Paperclip, Image as ImageIcon, X, Trash2, Edit3, Check, Clock, Download, FileText, Camera, EyeOff, CheckCheck, MapPin, Archive } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { db, storage } from '../firebase';
-import { collection, doc, getDocs, addDoc, query, where, orderBy, onSnapshot, serverTimestamp, Timestamp, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { collection, doc, getDocs, addDoc, query, where, onSnapshot, serverTimestamp, Timestamp, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 
 interface ChatUser { id: string; name: string; avatar?: string; department?: string; online?: boolean; lastSeen?: Timestamp; }
@@ -65,17 +65,44 @@ export default function ChatPage({ onBack }: Props) {
 
     useEffect(() => { if (!uid) return; (async () => { try { const s = await getDocs(collection(db, 'users')); setAllUsers(s.docs.filter(d => d.id !== uid).map(d => ({ id: d.id, name: d.data().name || 'مستخدم', avatar: d.data().avatar, department: d.data().department, online: d.data().online === true, lastSeen: d.data().lastSeen }))); } catch (e) { } setUsersLoaded(true); })(); }, [uid]);
 
-    useEffect(() => { if (!uid) return; const q = query(collection(db, 'conversations'), where('participants', 'array-contains', uid), orderBy('lastMessageAt', 'desc')); const u = onSnapshot(q, s => { setConvs(s.docs.map(d => ({ id: d.id, ...d.data() } as Conversation))); setLoading(false); }, () => setLoading(false)); return () => u(); }, [uid]);
+    useEffect(() => {
+        if (!uid) return;
+        // Query WITHOUT orderBy to avoid composite index requirement
+        const q = query(collection(db, 'conversations'), where('participants', 'array-contains', uid));
+        const u = onSnapshot(q, s => {
+            const data = s.docs.map(d => ({ id: d.id, ...d.data() } as Conversation));
+            // Sort client-side by lastMessageAt descending
+            data.sort((a, b) => {
+                const at = a.lastMessageAt?.toMillis?.() || 0;
+                const bt = b.lastMessageAt?.toMillis?.() || 0;
+                return bt - at;
+            });
+            setConvs(data);
+            setLoading(false);
+        }, (err) => { console.error('Conv listener error:', err); setLoading(false); });
+        return () => u();
+    }, [uid]);
 
     useEffect(() => {
         if (!activeChat) { setMsgs([]); return; }
-        const q = query(collection(db, 'conversations', activeChat.convId, 'messages'), orderBy('createdAt', 'asc'));
+        const convId = activeChat.convId;
+        const otherId = activeChat.otherUser.id;
+        // Query messages - sort client-side to avoid composite index
+        const q = query(collection(db, 'conversations', convId, 'messages'));
         const u = onSnapshot(q, s => {
             const m: Message[] = s.docs.map(d => ({ id: d.id, ...d.data() } as Message));
+            // Sort by createdAt ascending client-side
+            m.sort((a, b) => {
+                const at = a.createdAt?.toMillis?.() || 0;
+                const bt = b.createdAt?.toMillis?.() || 0;
+                return at - bt;
+            });
             setMsgs(m);
             setTimeout(() => endRef.current?.scrollIntoView({ behavior: 'smooth' }), 80);
-            setDoc(doc(db, 'conversations', activeChat.convId), { readBy: { [uid]: serverTimestamp() } }, { merge: true }).catch(() => { });
-            m.forEach(msg => { if (msg.senderId !== uid && (!msg.readBy || !msg.readBy[uid])) { updateDoc(doc(db, 'conversations', activeChat.convId, 'messages', msg.id), { [`readBy.${uid}`]: true }).catch(() => { }); } });
+            // Mark conversation as read
+            setDoc(doc(db, 'conversations', convId), { readBy: { [uid]: serverTimestamp() } }, { merge: true }).catch(() => { });
+            // Mark individual messages as read
+            m.forEach(msg => { if (msg.senderId !== uid && (!msg.readBy || !msg.readBy[uid])) { updateDoc(doc(db, 'conversations', convId, 'messages', msg.id), { [`readBy.${uid}`]: true }).catch(() => { }); } });
         });
         return () => u();
     }, [activeChat?.convId, uid]);

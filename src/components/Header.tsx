@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Bell, MessageCircle } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { db } from '../firebase';
-import { collection, getDocs, query, where, onSnapshot, orderBy } from 'firebase/firestore';
+import { collection, getDocs, query, where, onSnapshot } from 'firebase/firestore';
 
 interface HeaderProps {
     onNavigateProfile?: () => void;
@@ -37,8 +37,7 @@ export default function Header({ onNavigateProfile, onNavigateNotifications, onN
         if (!user) return;
         const q = query(
             collection(db, 'conversations'),
-            where('participants', 'array-contains', user.id),
-            orderBy('lastMessageAt', 'desc')
+            where('participants', 'array-contains', user.id)
         );
         const unsub = onSnapshot(q, (snap) => {
             let count = 0;
