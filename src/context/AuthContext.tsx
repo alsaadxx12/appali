@@ -8,7 +8,7 @@ import {
     onAuthStateChanged,
     User as FirebaseUser,
 } from 'firebase/auth';
-import { doc, getDoc, setDoc, onSnapshot } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, onSnapshot, serverTimestamp } from 'firebase/firestore';
 
 interface ProfileUpdate {
     name?: string;
@@ -189,6 +189,42 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return () => unsub();
     }, [user?.id]);
 
+    // ========== Online Presence Tracking ==========
+    useEffect(() => {
+        if (!user?.id) return;
+        const uid = user.id;
+        const userRef = doc(db, 'users', uid);
+
+        // Mark online
+        const goOnline = () => {
+            updateDoc(userRef, { online: true, lastSeen: serverTimestamp() }).catch(() => { });
+        };
+        // Mark offline
+        const goOffline = () => {
+            updateDoc(userRef, { online: false, lastSeen: serverTimestamp() }).catch(() => { });
+        };
+
+        goOnline();
+
+        const handleVisibility = () => {
+            if (document.visibilityState === 'visible') goOnline();
+            else goOffline();
+        };
+
+        window.addEventListener('beforeunload', goOffline);
+        document.addEventListener('visibilitychange', handleVisibility);
+
+        // Heartbeat every 60s
+        const heartbeat = setInterval(goOnline, 60000);
+
+        return () => {
+            goOffline();
+            window.removeEventListener('beforeunload', goOffline);
+            document.removeEventListener('visibilitychange', handleVisibility);
+            clearInterval(heartbeat);
+        };
+    }, [user?.id]);
+
     const login = (phoneOrUsername: string, _password: string): boolean => {
         const found = DEMO_USERS.find(u => u.phone === phoneOrUsername || u.username === phoneOrUsername);
         if (found) {
@@ -365,7 +401,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
     };
 
-    const logout = () => {
+    const logout = async () => {
+        // Mark offline before signing out
+        if (user?.id) {
+            try {
+                await updateDoc(doc(db, 'users', user.id), { online: false, lastSeen: serverTimestamp() });
+            } catch (e) { /* ignore */ }
+        }
         signOut(auth).catch(console.error);
         setUser(null);
         setFirebaseUser(null);
