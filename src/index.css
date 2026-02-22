@@ -109,6 +109,7 @@
 html {
   font-size: 17px;
   -webkit-text-size-adjust: 100%;
+  background: var(--bg-primary);
 }
 
 body {
@@ -121,6 +122,8 @@ body {
   -moz-osx-font-smoothing: grayscale;
   direction: rtl;
   transition: background 0.3s ease, color 0.3s ease;
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
 }
 
 #root {
