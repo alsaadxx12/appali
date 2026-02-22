@@ -355,12 +355,12 @@ export default function HomePage() {
         const scanActive = faceStatus === 'scanning';
 
         return (
-            <div className="page-enter" style={{
-                position: 'fixed', inset: 0, zIndex: 100,
-                background: 'linear-gradient(160deg, #050810 0%, #0c1221 40%, #0a0f1e 100%)',
+            <div className="page-content page-enter" style={{
                 display: 'flex', flexDirection: 'column', alignItems: 'center',
                 justifyContent: 'center', padding: '16px',
                 fontFamily: 'var(--font-arabic)',
+                minHeight: '80dvh',
+                position: 'relative',
                 overflow: 'hidden',
             }}>
                 {/* Animated background orbs */}
