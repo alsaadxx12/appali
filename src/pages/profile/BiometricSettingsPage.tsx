@@ -63,6 +63,8 @@ export default function BiometricSettingsPage({ onBack }: Props) {
     // Locked state (from Firestore)
     const [faceLocked, setFaceLocked] = useState(false);
     const [irisLocked, setIrisLocked] = useState(false);
+    const [faceInfo, setFaceInfo] = useState<{ registeredAt?: string; frameCount?: number } | null>(null);
+    const [irisInfo, setIrisInfo] = useState<{ registeredAt?: string; frameCount?: number } | null>(null);
 
     useEffect(() => { init(); }, []);
 
@@ -84,40 +86,43 @@ export default function BiometricSettingsPage({ onBack }: Props) {
             setDeviceSupported(supported);
             setSettings(savedSettings);
             if (userId) {
-                // Check Firestore lock status
-                const [faceLockedFS, irisLockedFS] = await Promise.all([
-                    isBiometricRegisteredInFirestore(userId, 'face'),
-                    isBiometricRegisteredInFirestore(userId, 'iris'),
+                // Always query Firestore for biometric data
+                const [faceData, irisData] = await Promise.all([
+                    loadBiometricFromFirestore(userId, 'face'),
+                    loadBiometricFromFirestore(userId, 'iris'),
                 ]);
-                setFaceLocked(faceLockedFS);
-                setIrisLocked(irisLockedFS);
 
-                // Try local first, then Firestore for photos
-                let localFace = isFaceRegistered(userId);
-                let localFacePhoto = getFacePhoto(userId);
-                let localIris = isIrisRegistered(userId);
-                let localIrisPhoto = getIrisPhoto(userId);
-
-                // If not in local but in Firestore, load from Firestore
-                if (!localFace && faceLockedFS) {
-                    const faceData = await loadBiometricFromFirestore(userId, 'face');
-                    if (faceData) {
-                        localFace = true;
-                        localFacePhoto = faceData.photo || null;
-                    }
-                }
-                if (!localIris && irisLockedFS) {
-                    const irisData = await loadBiometricFromFirestore(userId, 'iris');
-                    if (irisData) {
-                        localIris = true;
-                        localIrisPhoto = irisData.photo || null;
-                    }
+                // Face data from Firestore
+                if (faceData) {
+                    setHasFace(true);
+                    setFaceLocked(faceData.locked === true);
+                    setFacePhoto(faceData.photoURL || faceData.photo || null);
+                    setFaceInfo({
+                        registeredAt: faceData.registeredAt,
+                        frameCount: faceData.frameCount,
+                    });
+                } else {
+                    // Fallback to localStorage
+                    setHasFace(isFaceRegistered(userId));
+                    setFacePhoto(getFacePhoto(userId));
+                    setFaceLocked(false);
                 }
 
-                setHasFace(localFace);
-                setFacePhoto(localFacePhoto);
-                setHasIris(localIris);
-                setIrisPhoto(localIrisPhoto);
+                // Iris data from Firestore
+                if (irisData) {
+                    setHasIris(true);
+                    setIrisLocked(irisData.locked === true);
+                    setIrisPhoto(irisData.photoURL || irisData.photo || null);
+                    setIrisInfo({
+                        registeredAt: irisData.registeredAt,
+                        frameCount: irisData.frameCount,
+                    });
+                } else {
+                    // Fallback to localStorage
+                    setHasIris(isIrisRegistered(userId));
+                    setIrisPhoto(getIrisPhoto(userId));
+                    setIrisLocked(false);
+                }
             }
         } catch (e) {
             console.error('Error initializing:', e);
@@ -462,7 +467,10 @@ export default function BiometricSettingsPage({ onBack }: Props) {
                                 ✅ تم تسجيل الوجه
                             </div>
                             <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>
-                                يمكنك التحقق بالوجه عند دخول صفحة الحضور
+                                {faceInfo?.registeredAt
+                                    ? `تاريخ التسجيل: ${new Date(faceInfo.registeredAt).toLocaleDateString('ar-IQ')} — ${faceInfo.frameCount || 0} إطار`
+                                    : 'يمكنك التحقق بالوجه عند دخول صفحة الحضور'
+                                }
                             </div>
                         </div>
                         <div style={{ display: 'flex', gap: 6 }}>
@@ -636,7 +644,10 @@ export default function BiometricSettingsPage({ onBack }: Props) {
                                 ✅ تم تسجيل القزحية
                             </div>
                             <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>
-                                يمكنك التحقق بقزحية العين عند دخول صفحة الحضور
+                                {irisInfo?.registeredAt
+                                    ? `تاريخ التسجيل: ${new Date(irisInfo.registeredAt).toLocaleDateString('ar-IQ')} — ${irisInfo.frameCount || 0} إطار`
+                                    : 'يمكنك التحقق بقزحية العين عند دخول صفحة الحضور'
+                                }
                             </div>
                         </div>
                         <div style={{ display: 'flex', gap: 6 }}>
