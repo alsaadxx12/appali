@@ -24,6 +24,16 @@ interface PointValues {
     employeeOfMonth: number;
 }
 
+// Helper: render emoji — can be a Unicode emoji or an image URL
+function renderEmoji(emoji: string, size = 20) {
+    if (!emoji) return null;
+    // Detect if it's a URL (http/https/data:image)
+    if (emoji.startsWith('http') || emoji.startsWith('data:image') || emoji.startsWith('blob:')) {
+        return <img src={emoji} alt="" style={{ width: size, height: size, objectFit: 'contain', borderRadius: 4 }} />;
+    }
+    return <span style={{ fontSize: size }}>{emoji}</span>;
+}
+
 export default function VipPage() {
     const { user } = useAuth();
     const [levels, setLevels] = useState<VipLevelData[]>([]);
@@ -166,7 +176,7 @@ export default function VipPage() {
                             fontSize: 10, fontWeight: 600, marginBottom: 6,
                             color: 'var(--text-muted)',
                         }}>
-                            <span>التقدم نحو {nextLevel.emoji} {nextLevel.label}</span>
+                            <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}>التقدم نحو {renderEmoji(nextLevel.emoji, 14)} {nextLevel.label}</span>
                             <span style={{ fontFamily: 'var(--font-numeric)' }}>{progressToNext}%</span>
                         </div>
                         <div style={{
@@ -210,7 +220,7 @@ export default function VipPage() {
                                     border: `1px solid ${achieved ? `${lvl.color}33` : 'var(--border-glass)'}`,
                                     opacity: achieved ? 1 : 0.55,
                                 }}>
-                                    <span style={{ fontSize: 20 }}>{lvl.emoji}</span>
+                                    {renderEmoji(lvl.emoji, 24)}
                                     <div style={{ flex: 1 }}>
                                         <div style={{ fontSize: 12, fontWeight: 700, color: lvl.color }}>{lvl.label}</div>
                                         <div style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-numeric)' }}>
