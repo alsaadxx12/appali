@@ -146,12 +146,11 @@ export default function LeavePage() {
 
     const loadData = async () => {
         try {
-            // ═══ PARALLEL LOADING — all 4 queries at once ═══
-            const [vipSnap, leaveSnap, benefitsSnap, requestsSnap] = await Promise.all([
+            // ═══ PARALLEL LOADING — settings first (these always work) ═══
+            const [vipSnap, leaveSnap, benefitsSnap] = await Promise.all([
                 getDoc(doc(db, 'settings', 'vip')),
                 getDoc(doc(db, 'settings', 'leaves')),
                 getDoc(doc(db, 'settings', 'vipBenefits')),
-                user ? getDocs(query(collection(db, 'leaves'), where('employeeId', '==', user.id))) : Promise.resolve(null),
             ]);
 
             let lvls: VipLevelData[] = [];
@@ -189,13 +188,19 @@ export default function LeavePage() {
                 }
             }
 
-            // User leave requests
-            if (requestsSnap) {
-                requestsSnap.forEach(d => {
-                    reqs.push({ id: d.id, ...d.data() } as LeaveRequest);
-                });
-                reqs.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-                setRequests(reqs);
+            // ═══ User leave requests — separate try/catch for permissions ═══
+            if (user) {
+                try {
+                    const requestsSnap = await getDocs(query(collection(db, 'leaves'), where('employeeId', '==', user.id)));
+                    requestsSnap.forEach(d => {
+                        reqs.push({ id: d.id, ...d.data() } as LeaveRequest);
+                    });
+                    reqs.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+                    setRequests(reqs);
+                } catch (permErr) {
+                    console.warn('⚠️ Cannot read leaves collection (permissions):', permErr);
+                    // Keep cached requests if available
+                }
             }
 
             // Save to cache for instant load next time
