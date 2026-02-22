@@ -1,7 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
     ArrowRight, Lock, ShieldCheck, ShieldAlert,
-    CheckCircle, XCircle, Smartphone, AlertTriangle, Loader2
+    CheckCircle, XCircle, Smartphone, AlertTriangle, Loader2,
+    Camera, Trash2, User
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import {
@@ -10,6 +11,15 @@ import {
     saveBiometricSettings,
     BiometricSettings,
 } from '../../utils/biometricAuth';
+import {
+    isFaceRegistered,
+    getFacePhoto,
+    registerFace,
+    removeFaceData,
+    loadFaceModels,
+    startCamera,
+    stopCamera,
+} from '../../utils/faceAuth';
 
 interface Props {
     onBack: () => void;
@@ -21,9 +31,27 @@ export default function BiometricSettingsPage({ onBack }: Props) {
     const [settings, setSettings] = useState<BiometricSettings>({ enabled: false, required: false });
     const [loading, setLoading] = useState(true);
 
+    // Face registration
+    const [hasFace, setHasFace] = useState(false);
+    const [facePhoto, setFacePhoto] = useState<string | null>(null);
+    const [showCamera, setShowCamera] = useState(false);
+    const [cameraReady, setCameraReady] = useState(false);
+    const [faceLoading, setFaceLoading] = useState(false);
+    const [faceMessage, setFaceMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+    const videoRef = useRef<HTMLVideoElement>(null);
+    const streamRef = useRef<MediaStream | null>(null);
+
     const isAdmin = user?.role === 'admin';
+    const userId = user?.id || '';
 
     useEffect(() => { init(); }, []);
+
+    // Cleanup camera
+    useEffect(() => {
+        return () => {
+            stopCamera(streamRef.current);
+        };
+    }, []);
 
     const init = async () => {
         setLoading(true);
@@ -34,6 +62,10 @@ export default function BiometricSettingsPage({ onBack }: Props) {
             ]);
             setDeviceSupported(supported);
             setSettings(savedSettings);
+            if (userId) {
+                setHasFace(isFaceRegistered(userId));
+                setFacePhoto(getFacePhoto(userId));
+            }
         } catch (e) {
             console.error('Error initializing:', e);
         } finally {
@@ -51,6 +83,71 @@ export default function BiometricSettingsPage({ onBack }: Props) {
         const updated = { ...settings, required: !settings.required };
         setSettings(updated);
         try { await saveBiometricSettings(updated); } catch { setSettings(settings); }
+    };
+
+    const handleOpenCamera = async () => {
+        setShowCamera(true);
+        setCameraReady(false);
+        setFaceMessage(null);
+        setFaceLoading(true);
+
+        // Load models first
+        const loaded = await loadFaceModels();
+        if (!loaded) {
+            setFaceMessage({ type: 'error', text: 'فشل تحميل نماذج التعرف على الوجه' });
+            setFaceLoading(false);
+            return;
+        }
+
+        // Wait for video element to be ready
+        await new Promise(r => setTimeout(r, 300));
+        if (!videoRef.current) return;
+
+        const stream = await startCamera(videoRef.current);
+        if (!stream) {
+            setFaceMessage({ type: 'error', text: 'فشل فتح الكاميرا. اسمح بالوصول للكاميرا.' });
+            setFaceLoading(false);
+            return;
+        }
+        streamRef.current = stream;
+        setCameraReady(true);
+        setFaceLoading(false);
+    };
+
+    const handleCaptureFace = async () => {
+        if (!videoRef.current || !userId) return;
+        setFaceLoading(true);
+        setFaceMessage(null);
+
+        const result = await registerFace(userId, videoRef.current);
+        setFaceLoading(false);
+
+        if (result.success) {
+            setFaceMessage({ type: 'success', text: 'تم تسجيل الوجه بنجاح! ✅' });
+            setHasFace(true);
+            if (result.photo) setFacePhoto(result.photo);
+            // Close camera after success
+            setTimeout(() => {
+                handleCloseCamera();
+            }, 1500);
+        } else {
+            setFaceMessage({ type: 'error', text: result.error || 'فشل تسجيل الوجه' });
+        }
+    };
+
+    const handleCloseCamera = () => {
+        stopCamera(streamRef.current);
+        streamRef.current = null;
+        setShowCamera(false);
+        setCameraReady(false);
+    };
+
+    const handleRemoveFace = () => {
+        if (!userId) return;
+        removeFaceData(userId);
+        setHasFace(false);
+        setFacePhoto(null);
+        setFaceMessage({ type: 'success', text: 'تم حذف بيانات الوجه' });
     };
 
     if (loading) {
@@ -104,13 +201,6 @@ export default function BiometricSettingsPage({ onBack }: Props) {
                     position: 'relative', transition: 'all 300ms ease',
                 }}>
                     <Lock size={36} />
-                    {settings.enabled && (
-                        <div style={{
-                            position: 'absolute', inset: -4, borderRadius: '50%',
-                            border: '2px solid rgba(16,185,129,0.2)',
-                            animation: 'leavePendingPulse 2s ease-in-out infinite',
-                        }} />
-                    )}
                 </div>
 
                 <div style={{ fontSize: 16, fontWeight: 800, marginBottom: 4, position: 'relative' }}>
@@ -118,41 +208,10 @@ export default function BiometricSettingsPage({ onBack }: Props) {
                 </div>
                 <div style={{ fontSize: 12, color: 'var(--text-muted)', position: 'relative' }}>
                     {settings.enabled
-                        ? 'يُطلب Face ID / بصمة / رمز الجهاز عند الحضور'
+                        ? 'يُطلب التحقق قبل عرض صفحة الحضور'
                         : 'لا يتطلب تحقق إضافي'
                     }
                 </div>
-            </div>
-
-            {/* Device Support */}
-            <div className="glass-card" style={{
-                padding: '12px 14px', marginBottom: 12,
-                display: 'flex', alignItems: 'center', gap: 10,
-                borderRight: `3px solid ${deviceSupported ? 'var(--accent-emerald)' : 'var(--accent-amber)'}`,
-            }}>
-                <div style={{
-                    width: 36, height: 36, borderRadius: 'var(--radius-md)',
-                    background: deviceSupported ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)',
-                    color: deviceSupported ? 'var(--accent-emerald)' : 'var(--accent-amber)',
-                    display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
-                }}>
-                    <Smartphone size={18} />
-                </div>
-                <div style={{ flex: 1 }}>
-                    <div style={{ fontSize: 13, fontWeight: 700 }}>
-                        {deviceSupported ? 'الجهاز يدعم المصادقة' : 'يتطلب اتصال آمن (HTTPS)'}
-                    </div>
-                    <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>
-                        {deviceSupported
-                            ? 'Face ID / بصمة / رمز الجهاز'
-                            : 'تأكد من فتح الموقع عبر HTTPS'
-                        }
-                    </div>
-                </div>
-                {deviceSupported
-                    ? <CheckCircle size={18} style={{ color: 'var(--accent-emerald)' }} />
-                    : <XCircle size={18} style={{ color: 'var(--accent-amber)' }} />
-                }
             </div>
 
             {/* Settings Toggles */}
@@ -161,13 +220,12 @@ export default function BiometricSettingsPage({ onBack }: Props) {
                     <SettingToggle
                         icon={<ShieldCheck size={18} />}
                         label="تفعيل المصادقة البيومترية"
-                        description="يطلب رمز قفل الهاتف قبل الحضور"
+                        description="يتطلب التحقق من الهوية قبل الحضور"
                         enabled={settings.enabled}
                         onToggle={handleToggleEnabled}
                         color="var(--accent-emerald)"
                     />
                 )}
-
                 {isAdmin && settings.enabled && (
                     <SettingToggle
                         icon={<ShieldAlert size={18} />}
@@ -180,14 +238,169 @@ export default function BiometricSettingsPage({ onBack }: Props) {
                 )}
             </div>
 
+            {/* ========== Face Registration Section ========== */}
+            <div className="glass-card" style={{ padding: '16px', marginBottom: 16 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 14 }}>
+                    <Camera size={20} style={{ color: 'var(--accent-blue)' }} />
+                    <div style={{ fontSize: 14, fontWeight: 800 }}>تسجيل الوجه</div>
+                </div>
+
+                {/* Camera View */}
+                {showCamera && (
+                    <div style={{ marginBottom: 14 }}>
+                        <div style={{
+                            position: 'relative', width: '100%', aspectRatio: '4/3',
+                            borderRadius: 'var(--radius-md)', overflow: 'hidden',
+                            background: '#000', border: '2px solid var(--accent-blue)',
+                            marginBottom: 10,
+                        }}>
+                            <video
+                                ref={videoRef}
+                                autoPlay playsInline muted
+                                style={{
+                                    width: '100%', height: '100%', objectFit: 'cover',
+                                    transform: 'scaleX(-1)',
+                                }}
+                            />
+                            {!cameraReady && (
+                                <div style={{
+                                    position: 'absolute', inset: 0,
+                                    background: 'rgba(0,0,0,0.7)',
+                                    display: 'flex', flexDirection: 'column',
+                                    alignItems: 'center', justifyContent: 'center', gap: 8,
+                                    color: 'white',
+                                }}>
+                                    <Loader2 size={28} style={{ animation: 'spin 1s linear infinite' }} />
+                                    <div style={{ fontSize: 12 }}>جاري تحميل الكاميرا والنماذج...</div>
+                                </div>
+                            )}
+                            {/* Face guide oval */}
+                            {cameraReady && (
+                                <div style={{
+                                    position: 'absolute', inset: 0,
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                    pointerEvents: 'none',
+                                }}>
+                                    <div style={{
+                                        width: 180, height: 240, borderRadius: '50%',
+                                        border: '3px dashed rgba(59,130,246,0.5)',
+                                    }} />
+                                </div>
+                            )}
+                        </div>
+
+                        <div style={{ display: 'flex', gap: 8 }}>
+                            <button
+                                onClick={handleCaptureFace}
+                                disabled={!cameraReady || faceLoading}
+                                style={{
+                                    flex: 1, padding: '12px', borderRadius: 'var(--radius-md)',
+                                    background: cameraReady ? 'linear-gradient(135deg, #10b981, #06b6d4)' : 'var(--bg-glass-strong)',
+                                    border: 'none', color: cameraReady ? 'white' : 'var(--text-muted)',
+                                    fontSize: 13, fontWeight: 700, cursor: 'pointer',
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                                    opacity: faceLoading ? 0.6 : 1,
+                                }}
+                            >
+                                <Camera size={16} />
+                                {faceLoading ? 'جاري التقاط...' : 'التقاط الوجه'}
+                            </button>
+                            <button
+                                onClick={handleCloseCamera}
+                                style={{
+                                    padding: '12px 16px', borderRadius: 'var(--radius-md)',
+                                    background: 'var(--bg-glass)', border: '1px solid var(--border-glass)',
+                                    color: 'var(--text-secondary)', fontSize: 13, fontWeight: 700, cursor: 'pointer',
+                                }}
+                            >
+                                إلغاء
+                            </button>
+                        </div>
+                    </div>
+                )}
+
+                {/* Face Status Messages */}
+                {faceMessage && (
+                    <div style={{
+                        fontSize: 12, fontWeight: 600, marginBottom: 10,
+                        padding: '8px 12px', borderRadius: 'var(--radius-sm)',
+                        color: faceMessage.type === 'success' ? 'var(--accent-emerald)' : 'var(--accent-rose)',
+                        background: faceMessage.type === 'success' ? 'rgba(16,185,129,0.08)' : 'rgba(244,63,94,0.08)',
+                    }}>
+                        {faceMessage.text}
+                    </div>
+                )}
+
+                {/* Registered Face Preview */}
+                {hasFace && facePhoto && !showCamera ? (
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <div style={{
+                            width: 64, height: 64, borderRadius: 'var(--radius-md)', overflow: 'hidden',
+                            border: '2px solid var(--accent-emerald)', flexShrink: 0,
+                        }}>
+                            <img src={facePhoto} alt="وجه مسجّل" style={{
+                                width: '100%', height: '100%', objectFit: 'cover',
+                                transform: 'scaleX(-1)',
+                            }} />
+                        </div>
+                        <div style={{ flex: 1 }}>
+                            <div style={{ fontSize: 13, fontWeight: 700, color: 'var(--accent-emerald)' }}>
+                                ✅ تم تسجيل الوجه
+                            </div>
+                            <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>
+                                يمكنك التحقق بالوجه عند دخول صفحة الحضور
+                            </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: 6 }}>
+                            <button
+                                onClick={handleOpenCamera}
+                                style={{
+                                    padding: '8px', borderRadius: 'var(--radius-sm)',
+                                    background: 'rgba(59,130,246,0.1)', border: 'none',
+                                    color: 'var(--accent-blue)', cursor: 'pointer',
+                                }}
+                                title="إعادة التسجيل"
+                            >
+                                <Camera size={16} />
+                            </button>
+                            <button
+                                onClick={handleRemoveFace}
+                                style={{
+                                    padding: '8px', borderRadius: 'var(--radius-sm)',
+                                    background: 'rgba(244,63,94,0.1)', border: 'none',
+                                    color: 'var(--accent-rose)', cursor: 'pointer',
+                                }}
+                                title="حذف"
+                            >
+                                <Trash2 size={16} />
+                            </button>
+                        </div>
+                    </div>
+                ) : !showCamera && (
+                    <button
+                        onClick={handleOpenCamera}
+                        style={{
+                            width: '100%', padding: '14px', borderRadius: 'var(--radius-md)',
+                            background: 'linear-gradient(135deg, rgba(59,130,246,0.1), rgba(139,92,246,0.08))',
+                            border: '2px dashed rgba(59,130,246,0.3)',
+                            color: 'var(--accent-blue)', fontSize: 13, fontWeight: 700,
+                            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                        }}
+                    >
+                        <User size={18} />
+                        تسجيل وجه جديد
+                    </button>
+                )}
+            </div>
+
             {/* How it works */}
             {settings.enabled && (
                 <div className="glass-card" style={{ padding: '16px', marginBottom: 16 }}>
                     <div style={{ fontSize: 13, fontWeight: 700, marginBottom: 10 }}>كيف يعمل؟</div>
                     {[
-                        'عند الضغط على زر الحضور/الانصراف',
-                        'يظهر لك رمز قفل الهاتف (Face ID / بصمة / كلمة مرور)',
-                        'بعد التحقق بنجاح، يتم تسجيل الحضور تلقائياً',
+                        'عند فتح صفحة الحضور تظهر شاشة التحقق',
+                        'اختر: التحقق بالوجه أو بصمة/Face ID/رمز الجهاز',
+                        'بعد التحقق بنجاح، تظهر صفحة الحضور لتسجيل الدخول',
                     ].map((step, i) => (
                         <div key={i} style={{
                             display: 'flex', alignItems: 'center', gap: 10,
@@ -204,28 +417,6 @@ export default function BiometricSettingsPage({ onBack }: Props) {
                             <div style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{step}</div>
                         </div>
                     ))}
-                </div>
-            )}
-
-            {/* Warning if not supported */}
-            {!deviceSupported && settings.enabled && (
-                <div className="glass-card" style={{
-                    padding: '14px', marginBottom: 16,
-                    background: 'rgba(245,158,11,0.06)',
-                    border: '1px solid rgba(245,158,11,0.15)',
-                }}>
-                    <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10 }}>
-                        <AlertTriangle size={18} style={{ color: 'var(--accent-amber)', flexShrink: 0, marginTop: 2 }} />
-                        <div>
-                            <div style={{ fontSize: 12, fontWeight: 700, color: 'var(--accent-amber)', marginBottom: 4 }}>
-                                ملاحظة
-                            </div>
-                            <div style={{ fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.6 }}>
-                                المصادقة البيومترية تحتاج اتصال HTTPS آمن.
-                                تأكد من فتح الموقع عبر https:// وليس http://
-                            </div>
-                        </div>
-                    </div>
                 </div>
             )}
 
