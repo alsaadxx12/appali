@@ -14,6 +14,8 @@ interface ProfileUpdate {
     name?: string;
     phone?: string;
     password?: string;
+    avatar?: string;
+    coverPhoto?: string;
 }
 
 interface AuthContextType {
@@ -284,6 +286,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             ...user,
             name: data.name || user.name,
             phone: data.phone || user.phone,
+            avatar: data.avatar !== undefined ? data.avatar : user.avatar,
         };
         setUser(updatedUser);
         localStorage.setItem('attendance-user', JSON.stringify(updatedUser));
@@ -295,6 +298,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (data.name) firestoreUpdate.name = data.name;
         if (data.phone) firestoreUpdate.phone = data.phone;
         if (data.password) firestoreUpdate.password = data.password;
+        if (data.avatar !== undefined) firestoreUpdate.avatar = data.avatar;
+        if (data.coverPhoto !== undefined) firestoreUpdate.coverPhoto = data.coverPhoto;
 
         const saved = await saveUserToFirestore(user.id, firestoreUpdate);
         if (!saved) {
