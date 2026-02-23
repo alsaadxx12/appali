@@ -192,13 +192,16 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
     };
 
     const toggleSpeaker = () => {
-        if (remoteAudioRef.current) {
-            const audio = remoteAudioRef.current as any;
-            if (typeof audio.setSinkId === 'function') {
-                audio.setSinkId(speakerOn ? '' : 'default').catch(() => { });
+        const newVal = !speakerOn;
+        setSpeakerOn(newVal);
+        setTimeout(() => {
+            if (remoteAudioRef.current) {
+                const audio = remoteAudioRef.current as any;
+                if (typeof audio.setSinkId === 'function') {
+                    audio.setSinkId(newVal ? 'default' : '').catch(() => { });
+                }
             }
-        }
-        setSpeakerOn(!speakerOn);
+        }, 0);
     };
 
     // Archive / Unarchive conversation
@@ -294,14 +297,12 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
         const savedCallDocId = callDocId;
         const savedPartnerId = callPartner?.id || '';
 
-        // ========== INSTANT UI RESET ==========
+        // ========== INSTANT: Clear timers + ringtone (lightweight) ==========
         if (callTimerRef.current) { clearInterval(callTimerRef.current); callTimerRef.current = null; }
         if (callTimeoutRef.current) { clearTimeout(callTimeoutRef.current); callTimeoutRef.current = null; }
-        if (callUnsubRef.current) { callUnsubRef.current(); callUnsubRef.current = null; }
-        if (peerRef.current) { peerRef.current.close(); peerRef.current = null; }
-        if (localStreamRef.current) { localStreamRef.current.getTracks().forEach(t => t.stop()); localStreamRef.current = null; }
         if (ringtoneRef.current) { ringtoneRef.current.pause(); ringtoneRef.current.currentTime = 0; }
 
+        // ========== INSTANT UI RESET ==========
         setCallState('idle');
         setCallDocId(null);
         setCallPartner(null);
@@ -310,6 +311,20 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
         setCallMuted(false);
         setSpeakerOn(false);
         callConvIdRef.current = null;
+
+        // ========== DEFERRED: Heavy WebRTC cleanup (next tick so UI paints first) ==========
+        const savedUnsub = callUnsubRef.current;
+        const savedPeer = peerRef.current;
+        const savedStream = localStreamRef.current;
+        callUnsubRef.current = null;
+        peerRef.current = null;
+        localStreamRef.current = null;
+
+        setTimeout(() => {
+            if (savedUnsub) savedUnsub();
+            if (savedPeer) try { savedPeer.close(); } catch (e) { }
+            if (savedStream) savedStream.getTracks().forEach(t => t.stop());
+        }, 0);
 
         // ========== BACKGROUND Firestore writes (no await, fire-and-forget) ==========
         (async () => {
@@ -928,21 +943,56 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
                                 </div>
                             </button>
 
-                            {longPressConv === c.id && (
-                                <div className="cm" style={{ top: '50%', right: 16, transform: 'translateY(-50%)', zIndex: 100 }} onClick={e => e.stopPropagation()}>
-                                    <button className="ci dl" onClick={() => { setDeleteConfirm(c.id); setLongPressConv(null); }}><Trash2 size={16} />حذف المحادثة</button>
-                                    {c.archived?.[uid] ? (
-                                        <button className="ci" onClick={() => unarchiveConv(c.id)}><ArchiveRestore size={16} />إلغاء الأرشفة</button>
-                                    ) : (
-                                        <button className="ci" onClick={() => archiveConv(c.id)}><Archive size={16} />أرشفة</button>
-                                    )}
-                                    <button className="ci" onClick={() => { setShowBgPicker(true); setLongPressConv(null); }}><ImageIcon size={16} />تغيير الخلفية</button>
-                                </div>
-                            )}
                         </div>
                     );
                 })}
             </div>
+
+            {/* Long-press bottom sheet overlay */}
+            {longPressConv && (() => {
+                const c = convs.find(x => x.id === longPressConv);
+                if (!c) return null;
+                const oid = c.participants.find(p => p !== uid) || '';
+                const on = c.participantNames?.[oid] || 'مستخدم';
+                return (
+                    <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.6)', backdropFilter: 'blur(4px)', zIndex: 10000, display: 'flex', alignItems: 'flex-end' }} onClick={() => setLongPressConv(null)}>
+                        <div onClick={e => e.stopPropagation()} style={{
+                            background: 'var(--bg-card)', width: '100%', borderRadius: '28px 28px 0 0',
+                            padding: '16px 20px calc(20px + var(--safe-bottom, 0px))',
+                            animation: 'slideUp 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+                            borderTop: '1px solid var(--border-glass)',
+                        }}>
+                            <div style={{ width: 40, height: 5, borderRadius: 3, background: 'var(--border-glass)', margin: '0 auto 16px' }} />
+                            <div style={{ textAlign: 'center', fontSize: 15, fontWeight: 900, color: 'var(--text-primary)', marginBottom: 20 }}>{on}</div>
+                            <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                <button onClick={() => { setDeleteConfirm(c.id); setLongPressConv(null); }} style={{
+                                    display: 'flex', alignItems: 'center', gap: 14, padding: '14px 16px', borderRadius: 16,
+                                    background: 'rgba(244,63,94,0.08)', color: '#f43f5e', fontWeight: 800, fontSize: 14, width: '100%', textAlign: 'right',
+                                }}><Trash2 size={20} />حذف المحادثة</button>
+                                {c.archived?.[uid] ? (
+                                    <button onClick={() => { unarchiveConv(c.id); setLongPressConv(null); }} style={{
+                                        display: 'flex', alignItems: 'center', gap: 14, padding: '14px 16px', borderRadius: 16,
+                                        background: 'var(--bg-glass)', color: 'var(--text-primary)', fontWeight: 800, fontSize: 14, width: '100%', textAlign: 'right',
+                                    }}><ArchiveRestore size={20} />إلغاء الأرشفة</button>
+                                ) : (
+                                    <button onClick={() => { archiveConv(c.id); setLongPressConv(null); }} style={{
+                                        display: 'flex', alignItems: 'center', gap: 14, padding: '14px 16px', borderRadius: 16,
+                                        background: 'var(--bg-glass)', color: 'var(--text-primary)', fontWeight: 800, fontSize: 14, width: '100%', textAlign: 'right',
+                                    }}><Archive size={20} />أرشفة</button>
+                                )}
+                                <button onClick={() => { setShowBgPicker(true); setLongPressConv(null); }} style={{
+                                    display: 'flex', alignItems: 'center', gap: 14, padding: '14px 16px', borderRadius: 16,
+                                    background: 'var(--bg-glass)', color: 'var(--text-primary)', fontWeight: 800, fontSize: 14, width: '100%', textAlign: 'right',
+                                }}><ImageIcon size={20} />تغيير الخلفية</button>
+                            </div>
+                            <button onClick={() => setLongPressConv(null)} style={{
+                                width: '100%', padding: '14px', marginTop: 12, borderRadius: 16,
+                                background: 'var(--bg-glass)', color: 'var(--text-muted)', fontWeight: 800, fontSize: 14,
+                            }}>إلغاء</button>
+                        </div>
+                    </div>
+                );
+            })()}
 
             {/* Delete Modal Redesign */}
             {deleteConfirm && (
@@ -1067,6 +1117,6 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
             )}
             <audio ref={remoteAudioRef} autoPlay playsInline style={{ display: 'none' }} />
             <audio ref={ringtoneRef} src="data:audio/wav;base64,UklGRiQGAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAGAACAgICAgICAgICAgICAgICAgICAf3B3c3Bwb3Bwb3Bwb3Bwb3Bwb3N/i5WZnJ+goKCgoKCfnJmVi39wY1dRTUpHREFAQEBBREhMT1VdZ3uLmaCkp6enp6enp6SgmIl7a1lMREA+PDs5ODg4OTo8PkBGTldjdIiWn6Woqampqainol+UhHFdTUI7Nzc1NTMzMzM1NTc3PEhXaXqLmKGmqayrq6uqp6KdlYl8bl9SRz45NjQ0MjIyMjQ0NjhCUmJxgZCcoKWpq62trauop6OckoR4bF9TSD44NjQ0NDMzMzQ0NjhCUmFxgJCaoKWpq62ura6rpqKdloh8bl9SR0A3NjQ0NDMzMzQ0NjhCUmFxgJCapqerr7Ozs7OxrailnZOGd21gUkhCOzY0NDQzMzMzNDQ2OEJSYnGAkJigrK6ztLS0tLGtqKWdkoR4bGBUSkM7OEWQZ3Z5fYCCgYKBf318eHNvamNZUEdAPDk4NjU1NTU2ODg8QEdSX2x7iZaikJ2goKCgoKCfnJqWkYqBd2xfU0hCPDs5ODc3Nzc4ODk7PEJIUl5sdIGOmKChpqioqKiop6ShnpqTin96b2FWTERAPj08PDs7OztAPj5ARFBYZ294gIqQn5+kp6ioqKinpKGenpqTin94b2JXTkZCQD49PDs7Ozs8Pj5ARFBYZnN8hIyUl5ydoKOjo6OjoJ2bnJiTin94cGRYUEhEQkA+PT09PD0+PkBERFBWYm13gImQlJmc" playsInline style={{ display: 'none' }} />
-        </div>
+        </div >
     );
 }
