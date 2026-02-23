@@ -46,6 +46,7 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
     const [sending, setSending] = useState(false);
     const [usersLoaded, setUsersLoaded] = useState(false);
     const endRef = useRef<HTMLDivElement>(null);
+    const textareaRef = useRef<HTMLTextAreaElement>(null);
     const inpRef = useRef<HTMLInputElement>(null);
     const fileRef = useRef<HTMLInputElement>(null);
     const imgRef = useRef<HTMLInputElement>(null);
@@ -343,9 +344,9 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
                     </div>}
                     <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
                         <button onClick={() => { setShowAttach(!showAttach); setShowEmoji(false); }} style={{ width: 38, height: 38, borderRadius: 14, background: showAttach ? 'var(--accent-blue-soft)' : 'var(--bg-glass)', color: showAttach ? 'var(--accent-blue)' : 'var(--text-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Paperclip size={19} /></button>
-                        <div className="glass-input" style={{ flex: 1, borderRadius: 16, padding: '3px 6px', display: 'flex', alignItems: 'center', height: 38, maxHeight: 38, overflow: 'hidden' }}>
+                        <div className="glass-input" style={{ flex: 1, borderRadius: 16, padding: '3px 6px', display: 'flex', alignItems: 'center', minHeight: 38, maxHeight: 120, overflow: 'hidden' }}>
                             <button onClick={() => { setShowEmoji(!showEmoji); setShowAttach(false); }} style={{ padding: 6, color: showEmoji ? 'var(--accent-amber)' : 'var(--text-muted)', flexShrink: 0 }}><Smile size={19} /></button>
-                            <input type="text" placeholder="اكتب شيئاً جميل ..." value={editMsg ? editTxt : newMsg} onChange={e => editMsg ? setEditTxt(e.target.value) : setNewMsg(e.target.value)} onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); editMsg ? doEdit() : sendMessage(); } }} style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', padding: '7px 4px', color: 'var(--text-primary)', fontSize: 13.5, fontWeight: 700, fontFamily: 'var(--font-arabic)', height: 32, lineHeight: '32px' }} />
+                            <textarea ref={textareaRef} placeholder="اكتب شيئاً جميل ..." value={editMsg ? editTxt : newMsg} onChange={e => { editMsg ? setEditTxt(e.target.value) : setNewMsg(e.target.value); const ta = textareaRef.current; if (ta) { ta.style.height = '32px'; ta.style.height = Math.min(ta.scrollHeight, 100) + 'px'; } }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); editMsg ? doEdit() : sendMessage(); const ta = textareaRef.current; if (ta) ta.style.height = '32px'; } }} style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', padding: '7px 4px', color: 'var(--text-primary)', fontSize: 13.5, fontWeight: 700, fontFamily: 'var(--font-arabic)', resize: 'none', height: 32, minHeight: 32, maxHeight: 100, lineHeight: '18px', overflow: 'auto' }} rows={1} />
                         </div>
                         <button onClick={editMsg ? doEdit : () => sendMessage()} disabled={editMsg ? !editTxt.trim() : (!newMsg.trim() && !uploading)} style={{ width: 38, height: 38, borderRadius: 14, background: (newMsg.trim() || editTxt.trim()) ? 'linear-gradient(135deg, #4f46e5, #3b82f6)' : 'var(--bg-glass)', color: (newMsg.trim() || editTxt.trim()) ? 'white' : 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: (newMsg.trim() || editTxt.trim()) ? '0 8px 16px rgba(59,130,246,0.3)' : 'none', transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)', transform: (newMsg.trim() || editTxt.trim()) ? 'scale(1.05)' : 'scale(1)', flexShrink: 0 }}>{editMsg ? <Check size={19} /> : <Send size={19} style={{ transform: 'rotate(180deg)', marginLeft: -2 }} />}</button>
                     </div>
