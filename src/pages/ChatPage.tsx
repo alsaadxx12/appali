@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ArrowRight, SendHorizontal, Search, Users, MessageCircle, Loader2, Smile, Paperclip, Image as ImageIcon, X, Trash2, Edit3, Check, Clock, Download, FileText, Camera, EyeOff, CheckCheck, MapPin, Archive, ArchiveRestore, UserCircle, Phone, PhoneOff, MicOff, Mic, Volume2, VolumeX } from 'lucide-react';
+import { ArrowRight, SendHorizontal, Search, Users, MessageCircle, Loader2, Smile, Paperclip, Image as ImageIcon, X, Trash2, Edit3, Check, Clock, Download, FileText, Camera, EyeOff, CheckCheck, MapPin, Archive, ArchiveRestore, UserCircle, Phone, PhoneOff, MicOff, Mic, Volume2, VolumeX, Play, Pause, Square } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { db, storage } from '../firebase';
 import { collection, doc, getDocs, getDoc, addDoc, query, where, onSnapshot, serverTimestamp, Timestamp, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 
 interface ChatUser { id: string; name: string; avatar?: string; department?: string; online?: boolean; lastSeen?: Timestamp; }
-interface Message { id: string; text: string; senderId: string; senderName: string; createdAt: Timestamp | null; edited?: boolean; deleted?: boolean; type?: 'text' | 'image' | 'file' | 'location'; fileUrl?: string; fileName?: string; fileSize?: string; disappearAfter?: number; readBy?: Record<string, boolean>; location?: { lat: number; lng: number }; }
+interface Message { id: string; text: string; senderId: string; senderName: string; createdAt: Timestamp | null; edited?: boolean; deleted?: boolean; type?: 'text' | 'image' | 'file' | 'location' | 'voice'; fileUrl?: string; fileName?: string; fileSize?: string; audioDuration?: number; disappearAfter?: number; readBy?: Record<string, boolean>; location?: { lat: number; lng: number }; }
 interface Conversation { id: string; participants: string[]; participantNames: Record<string, string>; participantAvatars?: Record<string, string>; lastMessage?: string; lastMessageAt?: Timestamp; readBy?: Record<string, Timestamp>; lastSenderId?: string; archived?: Record<string, boolean>; }
 interface Props { onBack: () => void; onChatActive?: (active: boolean) => void; }
 
@@ -94,6 +94,71 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
     const chatSwiping = useRef(false);
     const handleChatSwipeStart = (e: React.TouchEvent) => { chatSwipeX.current = e.touches[0].clientX; chatSwipeY.current = e.touches[0].clientY; chatSwiping.current = true; };
     const handleChatSwipeEnd = (e: React.TouchEvent) => { if (!chatSwiping.current) return; chatSwiping.current = false; const dx = e.changedTouches[0].clientX - chatSwipeX.current; const dy = Math.abs(e.changedTouches[0].clientY - chatSwipeY.current); if (dx > 80 && dx > dy * 1.5) { setActiveChat(null); setShowEmoji(false); setEditMsg(null); setShowAttach(false); } };
+
+    // ========== Voice Recording State ==========
+    const [isRecording, setIsRecording] = useState(false);
+    const [recordingDuration, setRecordingDuration] = useState(0);
+    const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+    const recordingChunksRef = useRef<Blob[]>([]);
+    const recordingTimerRef = useRef<any>(null);
+    const recordingStreamRef = useRef<MediaStream | null>(null);
+
+    const startRecording = async () => {
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            recordingStreamRef.current = stream;
+            const mr = new MediaRecorder(stream, { mimeType: MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : 'audio/webm' });
+            recordingChunksRef.current = [];
+            mr.ondataavailable = (e) => { if (e.data.size > 0) recordingChunksRef.current.push(e.data); };
+            mr.start(100);
+            mediaRecorderRef.current = mr;
+            setIsRecording(true);
+            setRecordingDuration(0);
+            recordingTimerRef.current = setInterval(() => setRecordingDuration(p => p + 1), 1000);
+        } catch (e) { console.error('Mic error:', e); }
+    };
+
+    const stopRecording = async () => {
+        if (!mediaRecorderRef.current || !activeChat || !user) return;
+        const duration = recordingDuration;
+        return new Promise<void>((resolve) => {
+            mediaRecorderRef.current!.onstop = async () => {
+                if (recordingTimerRef.current) { clearInterval(recordingTimerRef.current); recordingTimerRef.current = null; }
+                if (recordingStreamRef.current) { recordingStreamRef.current.getTracks().forEach(t => t.stop()); recordingStreamRef.current = null; }
+                setIsRecording(false);
+                setRecordingDuration(0);
+                const blob = new Blob(recordingChunksRef.current, { type: 'audio/webm' });
+                if (blob.size < 1000 || duration < 1) { resolve(); return; } // Too short
+                try {
+                    setUploading(true);
+                    const path = `chat/${activeChat!.convId}/voice_${Date.now()}.webm`;
+                    const storageRef = ref(storage, path);
+                    await uploadBytes(storageRef, blob);
+                    const url = await getDownloadURL(storageRef);
+                    await sendMessage({ type: 'voice' as any, fileUrl: url, text: `🎤 رسالة صوتية (${Math.floor(duration / 60).toString().padStart(2, '0')}:${(duration % 60).toString().padStart(2, '0')})`, fileName: `voice_${Date.now()}.webm`, fileSize: `${(blob.size / 1024).toFixed(0)} KB` });
+                    // Save audioDuration to the last message
+                    const msgsQ = query(collection(db, 'conversations', activeChat!.convId, 'messages'));
+                    // Duration is saved in message text for now
+                } catch (e) { console.error('Voice upload error:', e); }
+                setUploading(false);
+                resolve();
+            };
+            mediaRecorderRef.current!.stop();
+        });
+    };
+
+    const cancelRecording = () => {
+        if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
+            mediaRecorderRef.current.onstop = null;
+            mediaRecorderRef.current.stop();
+        }
+        if (recordingTimerRef.current) { clearInterval(recordingTimerRef.current); recordingTimerRef.current = null; }
+        if (recordingStreamRef.current) { recordingStreamRef.current.getTracks().forEach(t => t.stop()); recordingStreamRef.current = null; }
+        mediaRecorderRef.current = null;
+        recordingChunksRef.current = [];
+        setIsRecording(false);
+        setRecordingDuration(0);
+    };
 
     // ========== Voice Call Functions ==========
     const ICE_SERVERS = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] };
@@ -540,7 +605,8 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
         @keyframes slideUp { from { opacity: 0; transform: translateY(100%); } to { opacity: 1; transform: translateY(0); } }
         @keyframes msgIn { from { opacity: 0; transform: scale(0.9) translateY(10px); } to { opacity: 1; transform: scale(1) translateY(0); } }
         @keyframes pulseGlow { 0% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.4); } 70% { box-shadow: 0 0 0 8px rgba(34, 197, 94, 0); } 100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0); } }
-        
+        @keyframes recPulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.4; transform: scale(0.8); } }
+        @keyframes recWave { 0% { width: 0%; } 50% { width: 100%; } 100% { width: 0%; } }
         .chat-root {
             width: 100%;
             max-width: 100vw;
@@ -668,6 +734,44 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
                                         {msg.type === 'image' && msg.fileUrl && !isDel && <div style={{ marginBottom: 6 }}><img src={msg.fileUrl} alt="" onClick={() => setImgPreview(msg.fileUrl!)} style={{ width: '100%', borderRadius: 12, cursor: 'pointer', display: 'block' }} /></div>}
                                         {msg.type === 'file' && msg.fileUrl && !isDel && <a href={msg.fileUrl} target="_blank" rel="noreferrer" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px', background: 'rgba(255,255,255,0.1)', borderRadius: 12, color: 'inherit' }}><div style={{ width: 40, height: 40, background: 'rgba(255,255,255,0.2)', borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><FileText size={20} /></div><div style={{ flex: 1, minWidth: 0 }}><div style={{ fontSize: 13, fontWeight: 800, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{msg.fileName}</div><div style={{ fontSize: 10, opacity: 0.7 }}>{msg.fileSize}</div></div></a>}
                                         {msg.type === 'location' && msg.location && !isDel && <a href={`https://www.google.com/maps?q=${msg.location.lat},${msg.location.lng}`} target="_blank" rel="noreferrer" style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '8px', background: 'rgba(255,255,255,0.1)', borderRadius: 12, color: 'inherit' }}><div style={{ width: 40, height: 40, background: 'rgba(255,255,255,0.2)', borderRadius: 10, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><MapPin size={20} /></div><div style={{ flex: 1 }}><div style={{ fontSize: 13, fontWeight: 800 }}>الموقع الحالي</div><div style={{ fontSize: 10, opacity: 0.7 }}>اضغط للعرض على الخريطة</div></div></a>}
+                                        {msg.type === 'voice' && msg.fileUrl && !isDel && (() => {
+                                            const VoicePlayer = ({ src }: { src: string }) => {
+                                                const audioRef = useRef<HTMLAudioElement>(null);
+                                                const [playing, setPlaying] = useState(false);
+                                                const [progress, setProgress] = useState(0);
+                                                const [dur, setDur] = useState(0);
+                                                const fmtTime = (s: number) => `${Math.floor(s / 60).toString().padStart(2, '0')}:${Math.floor(s % 60).toString().padStart(2, '0')}`;
+                                                return (
+                                                    <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '6px 4px', minWidth: 200 }}>
+                                                        <audio ref={audioRef} src={src} preload="metadata"
+                                                            onLoadedMetadata={() => { if (audioRef.current && isFinite(audioRef.current.duration)) setDur(audioRef.current.duration); }}
+                                                            onTimeUpdate={() => { if (audioRef.current && dur > 0) setProgress((audioRef.current.currentTime / dur) * 100); }}
+                                                            onEnded={() => { setPlaying(false); setProgress(0); }} />
+                                                        <button onClick={() => {
+                                                            if (!audioRef.current) return;
+                                                            if (playing) { audioRef.current.pause(); setPlaying(false); }
+                                                            else { audioRef.current.play().catch(() => { }); setPlaying(true); }
+                                                        }} style={{
+                                                            width: 36, height: 36, borderRadius: '50%',
+                                                            background: isMe ? 'rgba(255,255,255,0.2)' : 'rgba(99,102,241,0.15)',
+                                                            color: isMe ? 'white' : '#6366f1',
+                                                            display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                                                        }}>{playing ? <Pause size={18} /> : <Play size={18} style={{ marginLeft: 2 }} />}</button>
+                                                        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 4 }}>
+                                                            <div style={{ height: 4, background: isMe ? 'rgba(255,255,255,0.15)' : 'rgba(99,102,241,0.1)', borderRadius: 2, overflow: 'hidden', cursor: 'pointer' }}
+                                                                onClick={(e) => { if (!audioRef.current || !dur) return; const rect = e.currentTarget.getBoundingClientRect(); const pct = (e.clientX - rect.left) / rect.width; audioRef.current.currentTime = pct * dur; setProgress(pct * 100); }}>
+                                                                <div style={{ height: '100%', width: `${progress}%`, background: isMe ? 'rgba(255,255,255,0.8)' : '#6366f1', borderRadius: 2, transition: 'width 0.1s linear' }} />
+                                                            </div>
+                                                            <div style={{ display: 'flex', justifyContent: 'space-between' }}>
+                                                                <span style={{ fontSize: 10, opacity: 0.7, fontVariantNumeric: 'tabular-nums' }}>{fmtTime(audioRef.current?.currentTime || 0)}</span>
+                                                                <span style={{ fontSize: 10, opacity: 0.7, fontVariantNumeric: 'tabular-nums' }}>{dur > 0 ? fmtTime(dur) : '--:--'}</span>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                );
+                                            };
+                                            return <VoicePlayer src={msg.fileUrl!} />;
+                                        })()}
                                         <div style={{ wordBreak: 'break-word' }}>{msg.text}</div>
                                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: 4, marginTop: 4, opacity: 0.7 }}>{msg.edited && <span style={{ fontSize: 9 }}>معدلة</span>}<span style={{ fontSize: 10, fontWeight: 700 }}>{ft(msg.createdAt)}</span>{isMe && !isDel && <CheckCheck size={14} style={{ color: isRead ? '#34d399' : 'rgba(255,255,255,0.5)' }} />}</div>
                                     </div>
@@ -689,14 +793,31 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
                         <div style={{ display: 'flex', gap: 4, marginBottom: 8, overflowX: 'auto', paddingBottom: 4 }}>{EMOJI_CATS.map(c => <button key={c.id} onClick={() => setEmojiCat(c.id)} style={{ padding: '6px 10px', borderRadius: 10, background: emojiCat === c.id ? 'var(--accent-blue-soft)' : 'transparent', fontSize: 16 }}>{c.icon}</button>)}</div>
                         <div className="emoji-grid">{EMOJI_CATS.find(c => c.id === emojiCat)?.emojis.map((e, i) => <button key={i} className="emoji-btn" onClick={() => { if (editMsg) setEditTxt(p => p + e); else setNewMsg(p => p + e); }}>{e}</button>)}</div>
                     </div>}
-                    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
-                        <button onClick={() => { setShowAttach(!showAttach); setShowEmoji(false); }} style={{ width: 38, height: 38, borderRadius: 14, background: showAttach ? 'var(--accent-blue-soft)' : 'var(--bg-glass)', color: showAttach ? 'var(--accent-blue)' : 'var(--text-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Paperclip size={19} /></button>
-                        <div className="glass-input" style={{ flex: 1, borderRadius: 16, padding: '3px 6px', display: 'flex', alignItems: 'center', minHeight: 38, maxHeight: 120, overflow: 'hidden' }}>
-                            <button onClick={() => { setShowEmoji(!showEmoji); setShowAttach(false); }} style={{ padding: 6, color: showEmoji ? 'var(--accent-amber)' : 'var(--text-muted)', flexShrink: 0 }}><Smile size={19} /></button>
-                            <textarea ref={textareaRef} placeholder="اكتب شيئاً جميل ..." value={editMsg ? editTxt : newMsg} onChange={e => { editMsg ? setEditTxt(e.target.value) : setNewMsg(e.target.value); const ta = textareaRef.current; if (ta) { ta.style.height = '32px'; ta.style.height = Math.min(ta.scrollHeight, 100) + 'px'; } }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); editMsg ? doEdit() : sendMessage(); const ta = textareaRef.current; if (ta) ta.style.height = '32px'; } }} style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', padding: '7px 4px', color: 'var(--text-primary)', fontSize: 13.5, fontWeight: 700, fontFamily: 'var(--font-arabic)', resize: 'none', height: 32, minHeight: 32, maxHeight: 100, lineHeight: '18px', overflow: 'auto' }} rows={1} />
+                    {isRecording ? (
+                        /* Recording UI */
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '4px 0', animation: 'fadeUp 0.2s ease' }}>
+                            <button onClick={cancelRecording} style={{ width: 38, height: 38, borderRadius: 14, background: 'rgba(244,63,94,0.15)', color: '#f43f5e', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Trash2 size={18} /></button>
+                            <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 10, padding: '0 12px', background: 'var(--bg-glass)', borderRadius: 16, height: 38 }}>
+                                <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#ef4444', animation: 'recPulse 1s ease-in-out infinite' }} />
+                                <span style={{ fontSize: 14, fontWeight: 800, color: '#ef4444', fontVariantNumeric: 'tabular-nums' }}>{Math.floor(recordingDuration / 60).toString().padStart(2, '0')}:{(recordingDuration % 60).toString().padStart(2, '0')}</span>
+                                <div style={{ flex: 1, height: 3, background: 'rgba(239,68,68,0.2)', borderRadius: 2, overflow: 'hidden' }}><div style={{ height: '100%', background: '#ef4444', borderRadius: 2, animation: 'recWave 1.5s ease-in-out infinite' }} /></div>
+                            </div>
+                            <button onClick={stopRecording} style={{ width: 38, height: 38, borderRadius: 14, background: 'linear-gradient(135deg, #4f46e5, #3b82f6)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 8px 16px rgba(59,130,246,0.3)', flexShrink: 0 }}><SendHorizontal size={19} style={{ transform: 'scaleX(-1)', marginLeft: -1 }} /></button>
                         </div>
-                        <button onClick={editMsg ? doEdit : () => sendMessage()} disabled={editMsg ? !editTxt.trim() : (!newMsg.trim() && !uploading)} style={{ width: 38, height: 38, borderRadius: 14, background: (newMsg.trim() || editTxt.trim()) ? 'linear-gradient(135deg, #4f46e5, #3b82f6)' : 'var(--bg-glass)', color: (newMsg.trim() || editTxt.trim()) ? 'white' : 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: (newMsg.trim() || editTxt.trim()) ? '0 8px 16px rgba(59,130,246,0.3)' : 'none', transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)', transform: (newMsg.trim() || editTxt.trim()) ? 'scale(1.05)' : 'scale(1)', flexShrink: 0 }}>{editMsg ? <Check size={19} /> : <SendHorizontal size={19} style={{ transform: 'scaleX(-1)', marginLeft: -1 }} />}</button>
-                    </div>
+                    ) : (
+                        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
+                            <button onClick={() => { setShowAttach(!showAttach); setShowEmoji(false); }} style={{ width: 38, height: 38, borderRadius: 14, background: showAttach ? 'var(--accent-blue-soft)' : 'var(--bg-glass)', color: showAttach ? 'var(--accent-blue)' : 'var(--text-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Paperclip size={19} /></button>
+                            <div className="glass-input" style={{ flex: 1, borderRadius: 16, padding: '3px 6px', display: 'flex', alignItems: 'center', minHeight: 38, maxHeight: 120, overflow: 'hidden' }}>
+                                <button onClick={() => { setShowEmoji(!showEmoji); setShowAttach(false); }} style={{ padding: 6, color: showEmoji ? 'var(--accent-amber)' : 'var(--text-muted)', flexShrink: 0 }}><Smile size={19} /></button>
+                                <textarea ref={textareaRef} placeholder="اكتب شيئاً جميل ..." value={editMsg ? editTxt : newMsg} onChange={e => { editMsg ? setEditTxt(e.target.value) : setNewMsg(e.target.value); const ta = textareaRef.current; if (ta) { ta.style.height = '32px'; ta.style.height = Math.min(ta.scrollHeight, 100) + 'px'; } }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); editMsg ? doEdit() : sendMessage(); const ta = textareaRef.current; if (ta) ta.style.height = '32px'; } }} style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', padding: '7px 4px', color: 'var(--text-primary)', fontSize: 13.5, fontWeight: 700, fontFamily: 'var(--font-arabic)', resize: 'none', height: 32, minHeight: 32, maxHeight: 100, lineHeight: '18px', overflow: 'auto' }} rows={1} />
+                            </div>
+                            {(newMsg.trim() || editMsg) ? (
+                                <button onClick={editMsg ? doEdit : () => sendMessage()} disabled={editMsg ? !editTxt.trim() : (!newMsg.trim() && !uploading)} style={{ width: 38, height: 38, borderRadius: 14, background: (newMsg.trim() || editTxt.trim()) ? 'linear-gradient(135deg, #4f46e5, #3b82f6)' : 'var(--bg-glass)', color: (newMsg.trim() || editTxt.trim()) ? 'white' : 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: (newMsg.trim() || editTxt.trim()) ? '0 8px 16px rgba(59,130,246,0.3)' : 'none', transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)', transform: (newMsg.trim() || editTxt.trim()) ? 'scale(1.05)' : 'scale(1)', flexShrink: 0 }}>{editMsg ? <Check size={19} /> : <SendHorizontal size={19} style={{ transform: 'scaleX(-1)', marginLeft: -1 }} />}</button>
+                            ) : (
+                                <button onClick={startRecording} style={{ width: 38, height: 38, borderRadius: 14, background: 'linear-gradient(135deg, #22c55e, #16a34a)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: '0 8px 16px rgba(34,197,94,0.3)', flexShrink: 0, touchAction: 'manipulation' }}><Mic size={19} /></button>
+                            )}
+                        </div>
+                    )}
                 </div>
 
                 {showAttach && <><div style={{ position: 'fixed', inset: 0, zIndex: 999 }} onClick={() => setShowAttach(false)} /><div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 1000, background: 'var(--bg-card)', borderRadius: '32px 32px 0 0', padding: '16px 24px 40px', border: '1px solid var(--border-glass)', boxShadow: '0 -20px 60px rgba(0,0,0,0.5)', animation: 'slideUp 0.3s cubic-bezier(0.4, 0, 0.2, 1)' }}><div style={{ width: 40, height: 6, borderRadius: 3, background: 'var(--border-glass)', margin: '0 auto 20px' }} /><div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 16 }}>{[{ icon: <ImageIcon size={26} />, label: 'صورة', color: '#10b981', action: () => imgRef.current?.click() }, { icon: <Camera size={26} />, label: 'كاميرا', color: '#3b82f6', action: () => { const i = document.createElement('input'); i.type = 'file'; i.accept = 'image/*'; i.capture = 'environment'; i.onchange = (e: any) => { const f = e.target.files?.[0]; if (f) doUpload(f, 'image'); }; i.click(); } }, { icon: <FileText size={26} />, label: 'ملف', color: '#8b5cf6', action: () => fileRef.current?.click() }, { icon: <MapPin size={26} />, label: 'موقع', color: '#f59e0b', action: sendLocation }, { icon: <UserCircle size={26} />, label: 'اتصال', color: '#ec4899', action: sendContact },].map((item, idx) => <button key={idx} onClick={() => { item.action(); setShowAttach(false); }} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 10 }}><div style={{ width: 60, height: 60, borderRadius: 20, background: `${item.color}15`, color: item.color, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{item.icon}</div><span style={{ fontSize: 13, fontWeight: 800 }}>{item.label}</span></button>)}</div></div></>}
