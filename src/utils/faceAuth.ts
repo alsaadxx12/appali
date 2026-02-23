@@ -465,19 +465,22 @@ export async function registerFaceAngle({
         };
         const label = angleLabels[angle];
 
-        onProgress?.(`جاري التقاط وجه من ${label}...`, 20);
+        onProgress?.(`جاري تسجيل فيديو من ${label}...`, 10);
 
-        // Capture 4 frames per angle and average them
+        // Video-style capture: 12 frames over 3 seconds (250ms apart)
+        const totalFrames = 12;
+        const frameInterval = 250; // ms
         const descriptors: Float32Array[] = [];
-        for (let i = 0; i < 4; i++) {
+        for (let i = 0; i < totalFrames; i++) {
             const frame = await detectFace(video);
             if (frame) descriptors.push(frame.descriptor);
-            onProgress?.(`التقاط إطار ${i + 1}/4 (${label})`, 25 + i * 15);
-            await new Promise(r => setTimeout(r, 600));
+            const pct = Math.round(10 + (i / totalFrames) * 70);
+            onProgress?.(`تسجيل ${i + 1}/${totalFrames} (${label})`, pct);
+            await new Promise(r => setTimeout(r, frameInterval));
         }
 
-        if (descriptors.length < 2) {
-            return { success: false, error: `لم يتم اكتشاف وجه من ${label}. تأكد من الإضاءة.` };
+        if (descriptors.length < 4) {
+            return { success: false, error: `لم يتم اكتشاف وجه من ${label}. تأكد من الإضاءة والمسافة.` };
         }
 
         // Average descriptors for stability
@@ -682,9 +685,9 @@ export async function verifyFaceAdvanced(
         const confidence = Math.max(0, Math.min(100, Math.round(similarity * 100)));
         console.log(`🔍 Best match: angle=${bestAngle}, cosine=${similarity.toFixed(4)}, confidence=${confidence}%`);
 
-        // Cosine similarity threshold (0.55 = very strict, 0.45 = lenient)
-        const matchThreshold = storedAngles.length >= 2 ? 0.50 : 0.48;
-        const minFrames = 6;
+        // Cosine similarity threshold (lowered for easier real-world matching)
+        const matchThreshold = storedAngles.length >= 2 ? 0.40 : 0.38;
+        const minFrames = 4;
 
         if (similarity < matchThreshold) {
             return { success: false, error: 'الوجه غير مطابق', confidence };
@@ -709,7 +712,7 @@ export async function verifyFaceAdvanced(
             }
 
             // Require blink + head turn (or high overall score)
-            if (liveness.score < 55) {
+            if (liveness.score < 35) {
                 return {
                     success: false,
                     error: liveness.details || 'يرجى الرمش بعينيك وتحريك رأسك قليلاً',
@@ -719,7 +722,7 @@ export async function verifyFaceAdvanced(
             }
 
             // After many frames, blink is mandatory
-            if (!liveness.blinkDetected && livenessTracker.frames.length >= 12) {
+            if (!liveness.blinkDetected && livenessTracker.frames.length >= 20) {
                 return {
                     success: false,
                     error: 'يرجى الرمش بعينيك مرة واحدة على الأقل',
@@ -839,6 +842,152 @@ export async function startCamera(video: HTMLVideoElement): Promise<MediaStream 
 
 export function stopCamera(stream: MediaStream | null): void {
     stream?.getTracks().forEach(t => t.stop());
+}
+
+// ============================================================
+// Scanning Beam Animation — premium face scan effect
+// ============================================================
+
+let scanBeamPhase = 0;
+
+/**
+ * Draw an animated scanning beam over the face region.
+ * Call this each frame (every ~30ms via requestAnimationFrame or interval).
+ * The beam sweeps up and down across the face bounding box.
+ */
+export function drawScanBeam(
+    canvas: HTMLCanvasElement,
+    video: HTMLVideoElement,
+    frame: FaceScanFrame | null,
+    status?: 'scanning' | 'success' | 'fail'
+) {
+    const ctx = canvas.getContext('2d');
+    if (!ctx || !frame) return;
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+
+    const { box } = frame;
+    const beamColor = status === 'success' ? '#10b981'
+        : status === 'fail' ? '#f43f5e'
+            : '#6366f1';
+
+    // Beam position oscillates up/down within the face box
+    scanBeamPhase += 0.03;
+    const t = (Math.sin(scanBeamPhase) + 1) / 2; // 0..1
+    const beamY = box.y + t * box.height;
+    const beamHeight = 4;
+
+    // Draw the horizontal gradient beam
+    const gradient = ctx.createLinearGradient(box.x - 20, beamY, box.x + box.width + 20, beamY);
+    gradient.addColorStop(0, 'transparent');
+    gradient.addColorStop(0.2, `${beamColor}99`);
+    gradient.addColorStop(0.5, `${beamColor}ff`);
+    gradient.addColorStop(0.8, `${beamColor}99`);
+    gradient.addColorStop(1, 'transparent');
+
+    ctx.fillStyle = gradient;
+    ctx.fillRect(box.x - 20, beamY - beamHeight / 2, box.width + 40, beamHeight);
+
+    // Glow effect around beam
+    const glowGradient = ctx.createLinearGradient(box.x, beamY - 20, box.x, beamY + 20);
+    glowGradient.addColorStop(0, 'transparent');
+    glowGradient.addColorStop(0.5, `${beamColor}20`);
+    glowGradient.addColorStop(1, 'transparent');
+    ctx.fillStyle = glowGradient;
+    ctx.fillRect(box.x - 10, beamY - 20, box.width + 20, 40);
+}
+
+/**
+ * Combined face overlay with scanning beam — single call for verification UI.
+ */
+export function drawFaceOverlayWithBeam(
+    canvas: HTMLCanvasElement,
+    video: HTMLVideoElement,
+    frame: FaceScanFrame | null,
+    matchConfidence?: number,
+    status?: 'scanning' | 'success' | 'fail'
+) {
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    if (!frame) return;
+
+    const { box, landmarks, score } = frame;
+
+    // Color based on status
+    const color = status === 'success' ? '#10b981'
+        : status === 'fail' ? '#f43f5e'
+            : '#6366f1';
+
+    // Draw corner brackets
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 3;
+    ctx.setLineDash([]);
+    const cornerLen = 24;
+    const bx = box.x, by = box.y, bw = box.width, bh = box.height;
+
+    ctx.beginPath();
+    ctx.moveTo(bx, by + cornerLen); ctx.lineTo(bx, by); ctx.lineTo(bx + cornerLen, by);
+    ctx.moveTo(bx + bw - cornerLen, by); ctx.lineTo(bx + bw, by); ctx.lineTo(bx + bw, by + cornerLen);
+    ctx.moveTo(bx + bw, by + bh - cornerLen); ctx.lineTo(bx + bw, by + bh); ctx.lineTo(bx + bw - cornerLen, by + bh);
+    ctx.moveTo(bx + cornerLen, by + bh); ctx.lineTo(bx, by + bh); ctx.lineTo(bx, by + bh - cornerLen);
+    ctx.stroke();
+
+    // Draw facial landmarks (small dots)
+    ctx.fillStyle = `${color}88`;
+    const positions = landmarks.positions;
+    for (let i = 0; i < positions.length; i++) {
+        const pt = positions[i];
+        ctx.beginPath();
+        ctx.arc(pt.x, pt.y, 1.2, 0, Math.PI * 2);
+        ctx.fill();
+    }
+
+    // Scanning beam animation (only during scanning)
+    if (status === 'scanning') {
+        scanBeamPhase += 0.04;
+        const t = (Math.sin(scanBeamPhase) + 1) / 2;
+        const beamY = by + t * bh;
+        const beamHeight = 3;
+
+        const gradient = ctx.createLinearGradient(bx - 15, beamY, bx + bw + 15, beamY);
+        gradient.addColorStop(0, 'transparent');
+        gradient.addColorStop(0.15, `${color}66`);
+        gradient.addColorStop(0.5, `${color}cc`);
+        gradient.addColorStop(0.85, `${color}66`);
+        gradient.addColorStop(1, 'transparent');
+        ctx.fillStyle = gradient;
+        ctx.fillRect(bx - 15, beamY - beamHeight / 2, bw + 30, beamHeight);
+
+        // Glow
+        const glow = ctx.createLinearGradient(bx, beamY - 16, bx, beamY + 16);
+        glow.addColorStop(0, 'transparent');
+        glow.addColorStop(0.5, `${color}15`);
+        glow.addColorStop(1, 'transparent');
+        ctx.fillStyle = glow;
+        ctx.fillRect(bx, beamY - 16, bw, 32);
+    }
+
+    // Confidence text
+    if (matchConfidence !== undefined) {
+        const confText = `${Math.round(matchConfidence)}%`;
+        ctx.font = 'bold 16px sans-serif';
+        ctx.fillStyle = color;
+        ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+        ctx.lineWidth = 3;
+        ctx.strokeText(confText, bx, by - 8);
+        ctx.fillText(confText, bx, by - 8);
+    }
+
+    // Detection score
+    ctx.font = '10px sans-serif';
+    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+    ctx.fillText(`Detection: ${(score * 100).toFixed(0)}%`, bx, by + bh + 14);
 }
 
 // ============================================================

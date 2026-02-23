@@ -20,7 +20,7 @@ import {
     startCamera,
     stopCamera,
     detectFace,
-    drawFaceOverlay,
+    drawFaceOverlayWithBeam,
     FaceScanFrame,
     ensureBiometricDataLoaded,
     createLivenessTracker,
@@ -266,9 +266,9 @@ export default function HomePage() {
                     setHeadTurnDetected(livenessTrackerRef.current.headTurnDetected);
                 }
 
-                drawFaceOverlay(
+                drawFaceOverlayWithBeam(
                     canvasRef.current, videoRef.current, frame,
-                    conf, result.success ? 'success' : undefined
+                    conf, result.success ? 'success' : 'scanning'
                 );
 
                 if (result.success) {
@@ -308,7 +308,7 @@ export default function HomePage() {
                 cleanupCamera();
                 if (scanIntervalRef.current) clearInterval(scanIntervalRef.current);
             }
-        }, 800);
+        }, 500);
     };
 
     const handleAttendancePress = async () => {

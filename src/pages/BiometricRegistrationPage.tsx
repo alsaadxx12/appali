@@ -29,7 +29,7 @@ const ANGLE_STEPS: AngleStep[] = [
         angle: 'front',
         label: 'أمام',
         instruction: 'انظر مباشرة إلى الكاميرا',
-        hint: 'وجّه وجهك للأمام، ابتسم قليلاً في إضاءة جيدة',
+        hint: 'سيتم تسجيل فيديو 3 ثوانٍ — ارمش بشكل طبيعي وابتسم قليلاً',
         icon: '😐',
         gradient: 'linear-gradient(135deg, #3b82f6, #6366f1)',
         glow: 'rgba(59,130,246,0.35)',
@@ -38,7 +38,7 @@ const ANGLE_STEPS: AngleStep[] = [
         angle: 'right',
         label: 'يمين',
         instruction: 'أدِر وجهك قليلاً نحو اليمين',
-        hint: 'أمِل رأسك ببطء ناحية اليمين (15-30 درجة)',
+        hint: 'سيتم تسجيل فيديو 3 ثوانٍ — أمِل رأسك نحو اليمين وارمش',
         icon: '👉',
         gradient: 'linear-gradient(135deg, #f59e0b, #f97316)',
         glow: 'rgba(245,158,11,0.35)',
@@ -47,7 +47,7 @@ const ANGLE_STEPS: AngleStep[] = [
         angle: 'left',
         label: 'يسار',
         instruction: 'أدِر وجهك قليلاً نحو اليسار',
-        hint: 'أمِل رأسك ببطء ناحية اليسار (15-30 درجة)',
+        hint: 'سيتم تسجيل فيديو 3 ثوانٍ — أمِل رأسك نحو اليسار وابتسم',
         icon: '👈',
         gradient: 'linear-gradient(135deg, #10b981, #059669)',
         glow: 'rgba(16,185,129,0.35)',
@@ -167,7 +167,7 @@ export default function BiometricRegistrationPage({ onComplete }: Props) {
             const newCompleted = new Set(completedAngles);
             newCompleted.add(angleStep.angle);
             setCompletedAngles(newCompleted);
-            setMessage({ type: 'success', text: `✅ تم التقاط زاوية ${angleStep.label} بنجاح!` });
+            setMessage({ type: 'success', text: `✅ تم تسجيل فيديو ${angleStep.label} بنجاح!` });
 
             // Check if all 3 angles done
             if (newCompleted.size >= 3) {
@@ -187,7 +187,7 @@ export default function BiometricRegistrationPage({ onComplete }: Props) {
                 }, 1500);
             }
         } else {
-            setMessage({ type: 'error', text: result.error || 'فشل التقاط الزاوية' });
+            setMessage({ type: 'error', text: result.error || 'فشل تسجيل الفيديو' });
         }
     };
 
@@ -400,14 +400,18 @@ export default function BiometricRegistrationPage({ onComplete }: Props) {
                         </div>
                     )}
 
-                    {/* Loading overlay */}
                     {loading && (
-                        <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(4px)' }}>
-                            <div style={{ width: 52, height: 52, borderRadius: '50%', border: '3px solid rgba(255,255,255,0.1)', borderTopColor: '#a78bfa', animation: 'spin 0.8s linear infinite', marginBottom: 14 }} />
-                            <div style={{ color: 'white', fontSize: 13, fontWeight: 700, marginBottom: 10 }}>{progressText}</div>
-                            <div style={{ width: '60%', height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.1)', overflow: 'hidden' }}>
-                                <div style={{ width: `${progress}%`, height: '100%', borderRadius: 2, background: angleStep.gradient, transition: 'width 0.3s ease' }} />
+                        <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(3px)' }}>
+                            {/* Recording indicator */}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+                                <div style={{ width: 12, height: 12, borderRadius: '50%', background: '#f43f5e', animation: 'fvPulse 1s infinite', boxShadow: '0 0 12px rgba(244,63,94,0.6)' }} />
+                                <span style={{ fontSize: 14, fontWeight: 800, color: '#f43f5e' }}>REC</span>
                             </div>
+                            <div style={{ color: 'white', fontSize: 13, fontWeight: 700, marginBottom: 10 }}>{progressText}</div>
+                            <div style={{ width: '70%', height: 5, borderRadius: 3, background: 'rgba(255,255,255,0.1)', overflow: 'hidden' }}>
+                                <div style={{ width: `${progress}%`, height: '100%', borderRadius: 3, background: angleStep.gradient, transition: 'width 0.25s ease' }} />
+                            </div>
+                            <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', marginTop: 8, fontWeight: 600 }}>ارمش وتحرّك بشكل طبيعي</div>
                         </div>
                     )}
 
@@ -445,7 +449,7 @@ export default function BiometricRegistrationPage({ onComplete }: Props) {
                         }}
                     >
                         <ScanFace size={18} strokeWidth={2} />
-                        التقاط — {angleStep.label}
+                        🔴 تسجيل فيديو — {angleStep.label} (3 ثوانٍ)
                     </button>
                 )}
 
@@ -480,7 +484,13 @@ export default function BiometricRegistrationPage({ onComplete }: Props) {
                     </button>
                 )}
             </div>
-            <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
+            <style>{`
+                @keyframes spin { to { transform: rotate(360deg); } }
+                @keyframes fvPulse {
+                    0%, 100% { transform: scale(1); opacity: 1; }
+                    50% { transform: scale(1.4); opacity: 0.5; }
+                }
+            `}</style>
         </div>
     );
 }
