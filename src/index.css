@@ -223,7 +223,9 @@ img {
 .app-layout {
   display: flex;
   flex-direction: column;
-  min-height: 100dvh;
+  height: 100dvh;
+  max-height: 100dvh;
+  overflow: hidden;
   position: relative;
   z-index: 1;
 }

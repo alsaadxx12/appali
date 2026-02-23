@@ -377,7 +377,7 @@ export default function EmployeeManagementPage({ onBack }: Props) {
     const handleToggleActive = async (emp: Employee) => {
         const newStatus = emp.isActive === false ? true : false;
         try {
-            await updateDoc(doc(db, 'users', emp.id), { isActive: newStatus });
+            await setDoc(doc(db, 'users', emp.id), { isActive: newStatus, updatedAt: new Date().toISOString() }, { merge: true });
             setEmployees(employees.map(e => e.id === emp.id ? { ...e, isActive: newStatus } : e));
         } catch (e) {
             console.error('Error toggling employee status:', e);
@@ -392,7 +392,7 @@ export default function EmployeeManagementPage({ onBack }: Props) {
             // Find original employee to detect department/branch changes
             const origEmp = employees.find(e => e.id === formData.id);
 
-            await updateDoc(doc(db, 'users', formData.id), {
+            await setDoc(doc(db, 'users', formData.id), {
                 name: formData.name,
                 department: formData.department,
                 branch: formData.branch,
@@ -403,7 +403,8 @@ export default function EmployeeManagementPage({ onBack }: Props) {
                 phone: formData.phone,
                 permissionGroupId: formData.permissionGroupId,
                 maritalStatus: formData.maritalStatus,
-            });
+                updatedAt: new Date().toISOString(),
+            }, { merge: true });
 
             // Handle department manager assignment
             if (isDeptManager && formData.department && formData.branch) {
@@ -431,7 +432,8 @@ export default function EmployeeManagementPage({ onBack }: Props) {
             setTimeout(() => setSaveMessage(null), 3000);
         } catch (e) {
             console.error('Error saving employee:', e);
-            setSaveMessage({ type: 'error', text: 'فشل حفظ البيانات — تحقق من الاتصال بالإنترنت' });
+            const errMsg = e instanceof Error ? e.message : String(e);
+            setSaveMessage({ type: 'error', text: `فشل حفظ البيانات: ${errMsg.includes('permission') ? 'صلاحيات غير كافية' : 'تأكد من الاتصال بالإنترنت'}` });
             setTimeout(() => setSaveMessage(null), 5000);
         } finally {
             setSaving(false);
@@ -514,53 +516,45 @@ export default function EmployeeManagementPage({ onBack }: Props) {
                 </div>
             </div>
 
-            {/* Tab Switcher */}
-            <div className="glass-card" style={{ display: 'flex', gap: 4, padding: 4, marginBottom: 16 }}>
-                <button
-                    onClick={() => setActiveTab('employees')}
-                    style={{
-                        flex: 1, padding: '10px',
-                        borderRadius: 'var(--radius-md)',
-                        fontSize: 12, fontWeight: 700,
-                        background: activeTab === 'employees' ? 'linear-gradient(135deg, var(--accent-blue), var(--accent-teal))' : 'transparent',
-                        color: activeTab === 'employees' ? 'white' : 'var(--text-muted)',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-                        transition: 'all 200ms ease',
-                    }}
-                >
-                    <Users size={14} />
-                    الموظفين
-                </button>
-                <button
-                    onClick={() => setActiveTab('permissions')}
-                    style={{
-                        flex: 1, padding: '10px',
-                        borderRadius: 'var(--radius-md)',
-                        fontSize: 12, fontWeight: 700,
-                        background: activeTab === 'permissions' ? 'linear-gradient(135deg, var(--accent-purple), #8b5cf6)' : 'transparent',
-                        color: activeTab === 'permissions' ? 'white' : 'var(--text-muted)',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-                        transition: 'all 200ms ease',
-                    }}
-                >
-                    <Key size={14} />
-                    مجموعات الصلاحيات
-                </button>
-                <button
-                    onClick={() => setActiveTab('files')}
-                    style={{
-                        flex: 1, padding: '10px',
-                        borderRadius: 'var(--radius-md)',
-                        fontSize: 12, fontWeight: 700,
-                        background: activeTab === 'files' ? 'linear-gradient(135deg, #a855f7, #ec4899)' : 'transparent',
-                        color: activeTab === 'files' ? 'white' : 'var(--text-muted)',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-                        transition: 'all 200ms ease',
-                    }}
-                >
-                    <FolderOpen size={14} />
-                    إدارة الملفات
-                </button>
+            {/* Tab Switcher — Premium Pill Design */}
+            <div style={{
+                display: 'flex', gap: 0, padding: 3,
+                marginBottom: 18, borderRadius: 16,
+                background: 'rgba(15,23,42,0.6)',
+                border: '1px solid var(--border-glass)',
+                boxShadow: 'inset 0 1px 4px rgba(0,0,0,0.15)',
+                position: 'relative',
+                overflow: 'hidden',
+            }}>
+                {[
+                    { id: 'employees' as PageTab, label: 'الموظفين', icon: <Users size={13} />, gradient: 'linear-gradient(135deg, #06b6d4, #3b82f6)' },
+                    { id: 'permissions' as PageTab, label: 'الصلاحيات', icon: <Key size={13} />, gradient: 'linear-gradient(135deg, #8b5cf6, #6366f1)' },
+                    { id: 'files' as PageTab, label: 'الملفات', icon: <FolderOpen size={13} />, gradient: 'linear-gradient(135deg, #ec4899, #a855f7)' },
+                ].map(tab => (
+                    <button
+                        key={tab.id}
+                        onClick={() => setActiveTab(tab.id)}
+                        style={{
+                            flex: 1, padding: '9px 8px',
+                            borderRadius: 13,
+                            fontSize: 11, fontWeight: 800,
+                            letterSpacing: '0.02em',
+                            background: activeTab === tab.id ? tab.gradient : 'transparent',
+                            color: activeTab === tab.id ? 'white' : 'var(--text-muted)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5,
+                            transition: 'all 250ms cubic-bezier(0.4, 0, 0.2, 1)',
+                            transform: activeTab === tab.id ? 'scale(1)' : 'scale(0.97)',
+                            boxShadow: activeTab === tab.id ? '0 4px 15px rgba(0,0,0,0.25)' : 'none',
+                            border: 'none',
+                            cursor: 'pointer',
+                            position: 'relative',
+                            zIndex: activeTab === tab.id ? 2 : 1,
+                        }}
+                    >
+                        {tab.icon}
+                        {tab.label}
+                    </button>
+                ))}
             </div>
 
             {/* ========== EMPLOYEES TAB ========== */}
@@ -582,11 +576,35 @@ export default function EmployeeManagementPage({ onBack }: Props) {
                         />
                     </div>
 
-                    {/* Stats */}
+                    {/* Stats — Premium Cards */}
                     <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-                        <StatCard value={employees.length} label="إجمالي" color="var(--accent-blue)" />
-                        <StatCard value={employees.filter(e => e.role === 'admin').length} label="مشرف" color="var(--accent-purple)" />
-                        <StatCard value={employees.filter(e => e.role === 'employee').length} label="موظف" color="var(--accent-emerald)" />
+                        <div style={{
+                            flex: 1, padding: '14px 10px', borderRadius: 14,
+                            background: 'linear-gradient(135deg, rgba(59,130,246,0.08), rgba(6,182,212,0.04))',
+                            border: '1px solid rgba(59,130,246,0.12)',
+                            textAlign: 'center',
+                        }}>
+                            <div style={{ fontSize: 22, fontWeight: 900, color: 'var(--accent-blue)', fontFamily: 'var(--font-numeric)' }}>{employees.length}</div>
+                            <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', marginTop: 2 }}>إجمالي</div>
+                        </div>
+                        <div style={{
+                            flex: 1, padding: '14px 10px', borderRadius: 14,
+                            background: 'linear-gradient(135deg, rgba(139,92,246,0.08), rgba(99,102,241,0.04))',
+                            border: '1px solid rgba(139,92,246,0.12)',
+                            textAlign: 'center',
+                        }}>
+                            <div style={{ fontSize: 22, fontWeight: 900, color: '#8b5cf6', fontFamily: 'var(--font-numeric)' }}>{employees.filter(e => e.role === 'admin').length}</div>
+                            <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', marginTop: 2 }}>مشرف</div>
+                        </div>
+                        <div style={{
+                            flex: 1, padding: '14px 10px', borderRadius: 14,
+                            background: 'linear-gradient(135deg, rgba(16,185,129,0.08), rgba(20,184,166,0.04))',
+                            border: '1px solid rgba(16,185,129,0.12)',
+                            textAlign: 'center',
+                        }}>
+                            <div style={{ fontSize: 22, fontWeight: 900, color: 'var(--accent-emerald)', fontFamily: 'var(--font-numeric)' }}>{employees.filter(e => e.role === 'employee').length}</div>
+                            <div style={{ fontSize: 10, fontWeight: 600, color: 'var(--text-muted)', marginTop: 2 }}>موظف</div>
+                        </div>
                     </div>
 
                     {/* Add/Edit Form */}

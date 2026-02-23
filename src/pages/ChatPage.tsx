@@ -260,7 +260,8 @@ export default function ChatPage({ onBack }: Props) {
             <div className="page-enter chat-root" style={{
                 display: 'flex',
                 flexDirection: 'column',
-                height: 'calc(100dvh - 60px - var(--nav-height, 82px))',
+                height: '100%',
+                maxHeight: '100%',
                 padding: 0,
                 overflow: 'hidden',
                 position: 'relative',
@@ -271,18 +272,18 @@ export default function ChatPage({ onBack }: Props) {
                 <style>{css}</style>
 
                 {/* Modern Header */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '12px 16px', borderBottom: '1px solid var(--border-glass)', background: 'rgba(10, 14, 26, 0.8)', backdropFilter: 'blur(24px)', zIndex: 100, boxShadow: '0 4px 20px rgba(0,0,0,0.2)' }}>
-                    <button onClick={() => { setActiveChat(null); setShowEmoji(false); setEditMsg(null); setShowAttach(false); }} style={{ width: 38, height: 38, borderRadius: 12, background: 'var(--bg-glass)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)' }}><ArrowRight size={20} /></button>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', borderBottom: '1px solid var(--border-glass)', background: 'rgba(10, 14, 26, 0.8)', backdropFilter: 'blur(24px)', zIndex: 100, boxShadow: '0 4px 20px rgba(0,0,0,0.2)', flexShrink: 0 }}>
+                    <button onClick={() => { setActiveChat(null); setShowEmoji(false); setEditMsg(null); setShowAttach(false); }} style={{ width: 34, height: 34, borderRadius: 10, background: 'var(--bg-glass)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)', flexShrink: 0 }}><ArrowRight size={18} /></button>
                     <div style={{ position: 'relative' }}>
-                        <div style={{ width: 44, height: 44, borderRadius: '16px', background: otherUser.avatar ? `url(${otherUser.avatar}) center/cover` : 'linear-gradient(135deg,#6366f1,#8b5cf6)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: 16, fontWeight: 800, border: '2px solid var(--border-glass)', boxShadow: otherOnline ? '0 0 0 2px #22c55e, 0 10px 20px rgba(34,197,94,0.2)' : 'none' }}>{!otherUser.avatar && gi(otherUser.name)}</div>
+                        <div style={{ width: 38, height: 38, borderRadius: '14px', background: otherUser.avatar ? `url(${otherUser.avatar}) center/cover` : 'linear-gradient(135deg,#6366f1,#8b5cf6)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: 14, fontWeight: 800, border: '2px solid var(--border-glass)', boxShadow: otherOnline ? '0 0 0 2px #22c55e, 0 10px 20px rgba(34,197,94,0.2)' : 'none' }}>{!otherUser.avatar && gi(otherUser.name)}</div>
                         {otherOnline && <div style={{ position: 'absolute', bottom: -2, right: -2, width: 14, height: 14, borderRadius: '50%', background: '#22c55e', border: '3px solid #0a0e1a', animation: 'pulseGlow 2s infinite' }} />}
                     </div>
                     <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 16, fontWeight: 900, color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{otherUser.name}</div>
-                        <div style={{ fontSize: 11, color: otherOnline ? '#22c55e' : 'var(--text-muted)', fontWeight: 700 }}>{otherOnline ? 'متصل الآن' : fls(otherLastSeen)}</div>
+                        <div style={{ fontSize: 14, fontWeight: 900, color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{otherUser.name}</div>
+                        <div style={{ fontSize: 10, color: otherOnline ? '#22c55e' : 'var(--text-muted)', fontWeight: 700 }}>{otherOnline ? 'متصل الآن' : fls(otherLastSeen)}</div>
                     </div>
                     <div style={{ display: 'flex', gap: 8 }}>
-                        <button onClick={() => setShowDisappear(!showDisappear)} style={{ width: 38, height: 38, borderRadius: 12, background: disappear > 0 ? 'rgba(245,158,11,0.15)' : 'var(--bg-glass)', border: disappear > 0 ? '1px solid rgba(245,158,11,0.3)' : '1px solid var(--border-glass)', color: disappear > 0 ? '#f59e0b' : 'var(--text-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{disappear > 0 ? <EyeOff size={18} /> : <Clock size={18} />}</button>
+                        <button onClick={() => setShowDisappear(!showDisappear)} style={{ width: 34, height: 34, borderRadius: 10, background: disappear > 0 ? 'rgba(245,158,11,0.15)' : 'var(--bg-glass)', border: disappear > 0 ? '1px solid rgba(245,158,11,0.3)' : '1px solid var(--border-glass)', color: disappear > 0 ? '#f59e0b' : 'var(--text-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{disappear > 0 ? <EyeOff size={16} /> : <Clock size={16} />}</button>
                     </div>
                     {showDisappear && <div style={{ position: 'absolute', top: 60, left: 16, zIndex: 110, background: 'var(--bg-card)', border: '1px solid var(--border-glass)', borderRadius: 20, padding: 8, minWidth: 160, boxShadow: '0 10px 40px rgba(0,0,0,0.4)', animation: 'fadeUp 0.15s ease' }}>
                         <div style={{ fontSize: 11, fontWeight: 800, color: 'var(--text-muted)', padding: '6px 10px' }}>اختفاء الرسائل تلقائياً</div>
@@ -324,18 +325,18 @@ export default function ChatPage({ onBack }: Props) {
                 </div>}
 
                 {/* Modern Input Bar */}
-                <div style={{ padding: '12px 14px', paddingBottom: 'calc(12px + var(--safe-bottom))', background: 'rgba(10, 14, 26, 0.8)', backdropFilter: 'blur(24px)', borderTop: '1px solid var(--border-glass)', display: 'flex', flexDirection: 'column', gap: 10 }}>
-                    {showEmoji && <div style={{ background: 'var(--bg-glass-strong)', borderRadius: 20, padding: 12, marginBottom: 8, maxHeight: 200, overflowY: 'auto', animation: 'slideUp 0.3s ease' }}>
-                        <div style={{ display: 'flex', gap: 6, marginBottom: 12, overflowX: 'auto', paddingBottom: 4 }}>{EMOJI_CATS.map(c => <button key={c.id} onClick={() => setEmojiCat(c.id)} style={{ padding: '8px 12px', borderRadius: 12, background: emojiCat === c.id ? 'var(--accent-blue-soft)' : 'transparent', fontSize: 18 }}>{c.icon}</button>)}</div>
+                <div style={{ padding: '6px 10px', paddingBottom: '8px', background: 'rgba(10, 14, 26, 0.8)', backdropFilter: 'blur(24px)', borderTop: '1px solid var(--border-glass)', display: 'flex', flexDirection: 'column', gap: 6, flexShrink: 0 }}>
+                    {showEmoji && <div style={{ background: 'var(--bg-glass-strong)', borderRadius: 16, padding: 10, marginBottom: 4, maxHeight: 180, overflowY: 'auto', animation: 'slideUp 0.3s ease' }}>
+                        <div style={{ display: 'flex', gap: 4, marginBottom: 8, overflowX: 'auto', paddingBottom: 4 }}>{EMOJI_CATS.map(c => <button key={c.id} onClick={() => setEmojiCat(c.id)} style={{ padding: '6px 10px', borderRadius: 10, background: emojiCat === c.id ? 'var(--accent-blue-soft)' : 'transparent', fontSize: 16 }}>{c.icon}</button>)}</div>
                         <div className="emoji-grid">{EMOJI_CATS.find(c => c.id === emojiCat)?.emojis.map((e, i) => <button key={i} className="emoji-btn" onClick={() => { if (editMsg) setEditTxt(p => p + e); else setNewMsg(p => p + e); }}>{e}</button>)}</div>
                     </div>}
-                    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10 }}>
-                        <button onClick={() => { setShowAttach(!showAttach); setShowEmoji(false); }} style={{ width: 46, height: 46, borderRadius: 16, background: showAttach ? 'var(--accent-blue-soft)' : 'var(--bg-glass)', color: showAttach ? 'var(--accent-blue)' : 'var(--text-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Paperclip size={22} /></button>
-                        <div className="glass-input" style={{ flex: 1, borderRadius: 18, padding: '4px 8px', display: 'flex', alignItems: 'center', minHeight: 46 }}>
-                            <button onClick={() => { setShowEmoji(!showEmoji); setShowAttach(false); }} style={{ padding: 8, color: showEmoji ? 'var(--accent-amber)' : 'var(--text-muted)' }}><Smile size={22} /></button>
-                            <textarea placeholder="اكتب شيئاً جميل ..." value={editMsg ? editTxt : newMsg} onChange={e => editMsg ? setEditTxt(e.target.value) : setNewMsg(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); editMsg ? doEdit() : sendMessage(); } }} style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', padding: '10px 4px', color: 'var(--text-primary)', fontSize: 14.5, fontWeight: 700, fontFamily: 'var(--font-arabic)', resize: 'none', maxHeight: 100 }} rows={1} />
+                    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>
+                        <button onClick={() => { setShowAttach(!showAttach); setShowEmoji(false); }} style={{ width: 38, height: 38, borderRadius: 14, background: showAttach ? 'var(--accent-blue-soft)' : 'var(--bg-glass)', color: showAttach ? 'var(--accent-blue)' : 'var(--text-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}><Paperclip size={19} /></button>
+                        <div className="glass-input" style={{ flex: 1, borderRadius: 16, padding: '3px 6px', display: 'flex', alignItems: 'center', minHeight: 38 }}>
+                            <button onClick={() => { setShowEmoji(!showEmoji); setShowAttach(false); }} style={{ padding: 6, color: showEmoji ? 'var(--accent-amber)' : 'var(--text-muted)' }}><Smile size={19} /></button>
+                            <textarea placeholder="اكتب شيئاً جميل ..." value={editMsg ? editTxt : newMsg} onChange={e => editMsg ? setEditTxt(e.target.value) : setNewMsg(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); editMsg ? doEdit() : sendMessage(); } }} style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', padding: '7px 4px', color: 'var(--text-primary)', fontSize: 13.5, fontWeight: 700, fontFamily: 'var(--font-arabic)', resize: 'none', maxHeight: 80 }} rows={1} />
                         </div>
-                        <button onClick={editMsg ? doEdit : () => sendMessage()} disabled={editMsg ? !editTxt.trim() : (!newMsg.trim() && !uploading)} style={{ width: 46, height: 46, borderRadius: 18, background: (newMsg.trim() || editTxt.trim()) ? 'linear-gradient(135deg, #4f46e5, #3b82f6)' : 'var(--bg-glass)', color: (newMsg.trim() || editTxt.trim()) ? 'white' : 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: (newMsg.trim() || editTxt.trim()) ? '0 10px 20px rgba(59,130,246,0.3)' : 'none', transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)', transform: (newMsg.trim() || editTxt.trim()) ? 'scale(1.05)' : 'scale(1)' }}>{editMsg ? <Check size={22} /> : <Send size={22} style={{ transform: 'rotate(180deg)', marginLeft: -2 }} />}</button>
+                        <button onClick={editMsg ? doEdit : () => sendMessage()} disabled={editMsg ? !editTxt.trim() : (!newMsg.trim() && !uploading)} style={{ width: 38, height: 38, borderRadius: 14, background: (newMsg.trim() || editTxt.trim()) ? 'linear-gradient(135deg, #4f46e5, #3b82f6)' : 'var(--bg-glass)', color: (newMsg.trim() || editTxt.trim()) ? 'white' : 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: (newMsg.trim() || editTxt.trim()) ? '0 8px 16px rgba(59,130,246,0.3)' : 'none', transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)', transform: (newMsg.trim() || editTxt.trim()) ? 'scale(1.05)' : 'scale(1)', flexShrink: 0 }}>{editMsg ? <Check size={19} /> : <Send size={19} style={{ transform: 'rotate(180deg)', marginLeft: -2 }} />}</button>
                     </div>
                 </div>
 
