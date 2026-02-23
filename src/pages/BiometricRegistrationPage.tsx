@@ -61,15 +61,6 @@ const DIRECTION_STEPS: DirectionStep[] = [
         gradient: 'linear-gradient(135deg, #10b981, #059669)',
         glow: 'rgba(16,185,129,0.4)',
     },
-    {
-        angle: 'down',
-        label: 'أسفل',
-        instruction: 'نزّل رأسك لجوه',
-        icon: '👇',
-        color: '#ec4899',
-        gradient: 'linear-gradient(135deg, #ec4899, #db2777)',
-        glow: 'rgba(236,72,153,0.4)',
-    },
 ];
 
 export default function BiometricRegistrationPage({ onComplete }: Props) {
@@ -231,7 +222,7 @@ export default function BiometricRegistrationPage({ onComplete }: Props) {
                             تسجيل الوجه البيومتري
                         </h1>
                         <p style={{ fontSize: 12.5, color: 'rgba(248,250,252,0.45)', lineHeight: 1.7, maxWidth: 280, margin: '0 auto' }}>
-                            سنلتقط وجهك من 5 اتجاهات مختلفة لبناء نموذج آمن ودقيق
+                            سنلتقط وجهك من 4 اتجاهات مختلفة لبناء نموذج آمن ودقيق
                         </p>
                     </div>
 
@@ -249,7 +240,7 @@ export default function BiometricRegistrationPage({ onComplete }: Props) {
                     </div>
 
                     {/* Direction cards */}
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 6, marginBottom: 22 }}>
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 8, marginBottom: 22 }}>
                         {DIRECTION_STEPS.map((s, i) => (
                             <div key={s.angle} style={{
                                 padding: '10px 4px', textAlign: 'center', borderRadius: 12,
@@ -315,7 +306,7 @@ export default function BiometricRegistrationPage({ onComplete }: Props) {
                         تم التسجيل بنجاح! 🎉
                     </h2>
                     <p style={{ fontSize: 13, color: 'rgba(248,250,252,0.4)', marginBottom: 20, lineHeight: 1.8 }}>
-                        تم تسجيل جميع الاتجاهات الخمسة بنجاح
+                        تم تسجيل جميع الاتجاهات الأربعة بنجاح
                         <br />
                         يمكنك الآن استخدام وجهك لتسجيل الحضور
                     </p>
@@ -373,39 +364,41 @@ export default function BiometricRegistrationPage({ onComplete }: Props) {
             }} />
 
             <div style={{ ...cardStyle, padding: '20px 16px' }}>
-                {/* Progress bar at top */}
-                <div style={{ marginBottom: 16 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                        <span style={{ fontSize: 11, fontWeight: 700, color: 'rgba(255,255,255,0.4)' }}>
-                            {completedCount}/{totalSteps} مكتمل
-                        </span>
-                        <span style={{ fontSize: 11, fontWeight: 800, color: step.color }}>
-                            {step.label}
-                        </span>
-                    </div>
-                    <div style={{ height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.06)', overflow: 'hidden' }}>
-                        <div style={{
-                            height: '100%', borderRadius: 2, background: step.gradient,
-                            width: `${(completedCount / totalSteps) * 100}%`,
-                            transition: 'width 0.5s ease',
-                        }} />
+                {/* Circular dot progress */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 18 }}>
+                    <div style={{ position: 'relative', width: 80, height: 80 }}>
+                        {/* Background ring */}
+                        <svg width="80" height="80" viewBox="0 0 80 80" style={{ position: 'absolute', top: 0, left: 0 }}>
+                            <circle cx="40" cy="40" r="34" fill="none" stroke="rgba(255,255,255,0.06)" strokeWidth="4" />
+                            <circle cx="40" cy="40" r="34" fill="none" stroke={step.color} strokeWidth="4"
+                                strokeDasharray={`${(completedCount / totalSteps) * 213.6} 213.6`}
+                                strokeLinecap="round" transform="rotate(-90 40 40)"
+                                style={{ transition: 'stroke-dasharray 0.6s ease, stroke 0.3s ease' }} />
+                        </svg>
+                        {/* Center icon */}
+                        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            <span style={{ fontSize: 28 }}>{step.icon}</span>
+                        </div>
                     </div>
                 </div>
 
-                {/* Step pills */}
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, marginBottom: 14 }}>
+                {/* Dot indicators */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, marginBottom: 14 }}>
                     {DIRECTION_STEPS.map((s, i) => (
-                        <div key={s.angle} style={{
-                            width: completedAngles.has(s.angle) ? 22 : i === currentIdx ? 28 : 18,
-                            height: 22,
-                            borderRadius: 11,
-                            background: completedAngles.has(s.angle) ? '#10b981' : i === currentIdx ? step.gradient : 'rgba(255,255,255,0.06)',
-                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            fontSize: 9, color: 'white', fontWeight: 900,
-                            transition: 'all 0.3s ease',
-                            boxShadow: i === currentIdx ? `0 4px 16px ${step.glow}` : 'none',
-                        }}>
-                            {completedAngles.has(s.angle) ? '✓' : i === currentIdx ? s.icon : ''}
+                        <div key={s.angle} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4 }}>
+                            <div style={{
+                                width: i === currentIdx ? 14 : 10,
+                                height: i === currentIdx ? 14 : 10,
+                                borderRadius: '50%',
+                                background: completedAngles.has(s.angle) ? '#10b981' : i === currentIdx ? step.color : 'rgba(255,255,255,0.12)',
+                                transition: 'all 0.4s cubic-bezier(0.4,0,0.2,1)',
+                                boxShadow: completedAngles.has(s.angle) ? '0 0 12px rgba(16,185,129,0.5)' : i === currentIdx ? `0 0 12px ${step.glow}` : 'none',
+                                border: i === currentIdx && !completedAngles.has(s.angle) ? `2px solid ${step.color}` : 'none',
+                                animation: i === currentIdx && !completedAngles.has(s.angle) ? 'dotPulse 1.5s ease-in-out infinite' : 'none',
+                            }}>
+                                {completedAngles.has(s.angle) && <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', width: '100%', height: '100%', fontSize: 7, color: 'white', fontWeight: 900 }}>✓</span>}
+                            </div>
+                            <span style={{ fontSize: 8, fontWeight: 800, color: i === currentIdx ? step.color : completedAngles.has(s.angle) ? '#34d399' : 'rgba(255,255,255,0.25)', transition: 'color 0.3s ease' }}>{s.label}</span>
                         </div>
                     ))}
                 </div>
@@ -468,7 +461,7 @@ export default function BiometricRegistrationPage({ onComplete }: Props) {
                                 fontSize: 42, opacity: 0.25,
                                 animation: `dirBounce_${step.angle} 1.5s ease-in-out infinite`,
                             }}>
-                                {step.angle === 'right' ? '→' : step.angle === 'left' ? '←' : step.angle === 'up' ? '↑' : step.angle === 'down' ? '↓' : '⊙'}
+                                {step.angle === 'right' ? '→' : step.angle === 'left' ? '←' : step.angle === 'up' ? '↑' : '⊙'}
                             </div>
                         </div>
                     )}
@@ -629,6 +622,10 @@ export default function BiometricRegistrationPage({ onComplete }: Props) {
                     50% { transform: scale(1.15); }
                     100% { transform: scale(1); opacity: 1; }
                 }
+                @keyframes dotPulse {
+                    0%, 100% { transform: scale(1); }
+                    50% { transform: scale(1.3); }
+                }
                 @keyframes dirBounce_right {
                     0%, 100% { transform: translateX(0); }
                     50% { transform: translateX(12px); }
@@ -640,10 +637,6 @@ export default function BiometricRegistrationPage({ onComplete }: Props) {
                 @keyframes dirBounce_up {
                     0%, 100% { transform: translateY(0); }
                     50% { transform: translateY(-12px); }
-                }
-                @keyframes dirBounce_down {
-                    0%, 100% { transform: translateY(0); }
-                    50% { transform: translateY(12px); }
                 }
                 @keyframes dirBounce_front {
                     0%, 100% { transform: scale(1); opacity: 0.2; }
