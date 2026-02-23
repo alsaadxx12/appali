@@ -3,9 +3,10 @@ import React, { useRef, useState, useCallback } from 'react';
 interface PullToRefreshProps {
     onRefresh: () => Promise<void> | void;
     children: React.ReactNode;
+    disabled?: boolean;
 }
 
-export default function PullToRefresh({ onRefresh, children }: PullToRefreshProps) {
+export default function PullToRefresh({ onRefresh, children, disabled }: PullToRefreshProps) {
     const [pulling, setPulling] = useState(false);
     const [pullDistance, setPullDistance] = useState(0);
     const [refreshing, setRefreshing] = useState(false);
@@ -16,22 +17,23 @@ export default function PullToRefresh({ onRefresh, children }: PullToRefreshProp
     const MAX_PULL = 120;
 
     const handleTouchStart = useCallback((e: React.TouchEvent) => {
+        if (disabled) return;
         const el = containerRef.current;
         if (!el || el.scrollTop > 0) return;
         startY.current = e.touches[0].clientY;
         setPulling(true);
-    }, []);
+    }, [disabled]);
 
     const handleTouchMove = useCallback((e: React.TouchEvent) => {
-        if (!pulling || refreshing) return;
+        if (disabled || !pulling || refreshing) return;
         const dy = e.touches[0].clientY - startY.current;
         if (dy > 0) {
             setPullDistance(Math.min(dy * 0.5, MAX_PULL));
         }
-    }, [pulling, refreshing]);
+    }, [disabled, pulling, refreshing]);
 
     const handleTouchEnd = useCallback(async () => {
-        if (!pulling) return;
+        if (disabled || !pulling) return;
         setPulling(false);
 
         if (pullDistance >= THRESHOLD && !refreshing) {
@@ -46,7 +48,7 @@ export default function PullToRefresh({ onRefresh, children }: PullToRefreshProp
             setRefreshing(false);
         }
         setPullDistance(0);
-    }, [pulling, pullDistance, refreshing, onRefresh]);
+    }, [disabled, pulling, pullDistance, refreshing, onRefresh]);
 
     return (
         <div
@@ -54,7 +56,7 @@ export default function PullToRefresh({ onRefresh, children }: PullToRefreshProp
             onTouchStart={handleTouchStart}
             onTouchMove={handleTouchMove}
             onTouchEnd={handleTouchEnd}
-            style={{ position: 'relative', flex: 1, overflow: 'auto' }}
+            style={{ position: 'relative', flex: 1, overflow: disabled ? 'hidden' : 'auto' }}
         >
             {/* Pull indicator */}
             {(pullDistance > 0 || refreshing) && (

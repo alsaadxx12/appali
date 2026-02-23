@@ -156,7 +156,7 @@ function AppInner({
                     onNavigateNotifications={() => setCurrentPage('notificationInbox')}
                     onNavigateChat={() => setCurrentPage('chat')}
                 />}
-                <PullToRefresh onRefresh={handleRefresh}>
+                <PullToRefresh onRefresh={handleRefresh} disabled={chatActive}>
                     <div
                         key={`${currentPage}-${refreshKey}`}
                         onTouchStart={handleSwipeStart}
