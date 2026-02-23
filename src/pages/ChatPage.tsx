@@ -733,40 +733,40 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
                         {/* Call action buttons */}
                         <div style={{ display: 'flex', gap: 24, marginTop: 40, alignItems: 'center' }}>
                             {callState === 'ringing' && (
-                                <button onClick={() => callDocId && answerCall(callDocId)} style={{
+                                <button onTouchEnd={(e) => { e.preventDefault(); callDocId && answerCall(callDocId); }} onClick={() => callDocId && answerCall(callDocId)} style={{
                                     width: 64, height: 64, borderRadius: '50%',
                                     background: 'linear-gradient(135deg, #22c55e, #16a34a)',
                                     border: 'none', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                    boxShadow: '0 8px 30px rgba(34,197,94,0.4)', animation: 'callBtnPulse 1.5s ease-in-out infinite', cursor: 'pointer',
+                                    boxShadow: '0 8px 30px rgba(34,197,94,0.4)', animation: 'callBtnPulse 1.5s ease-in-out infinite', cursor: 'pointer', touchAction: 'manipulation',
                                 }}><Phone size={28} /></button>
                             )}
                             {callState === 'connected' && (
                                 <>
-                                    <button onClick={toggleMute} style={{
+                                    <button onTouchEnd={(e) => { e.preventDefault(); toggleMute(); }} onClick={toggleMute} style={{
                                         width: 52, height: 52, borderRadius: '50%',
                                         background: callMuted ? 'rgba(245,158,11,0.2)' : 'rgba(255,255,255,0.1)',
                                         border: callMuted ? '2px solid rgba(245,158,11,0.5)' : '2px solid rgba(255,255,255,0.2)',
                                         color: callMuted ? '#f59e0b' : 'white',
-                                        display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+                                        display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', touchAction: 'manipulation',
                                     }}>
                                         {callMuted ? <MicOff size={22} /> : <Mic size={22} />}
                                     </button>
-                                    <button onClick={toggleSpeaker} style={{
+                                    <button onTouchEnd={(e) => { e.preventDefault(); toggleSpeaker(); }} onClick={toggleSpeaker} style={{
                                         width: 52, height: 52, borderRadius: '50%',
                                         background: speakerOn ? 'rgba(59,130,246,0.2)' : 'rgba(255,255,255,0.1)',
                                         border: speakerOn ? '2px solid rgba(59,130,246,0.5)' : '2px solid rgba(255,255,255,0.2)',
                                         color: speakerOn ? '#3b82f6' : 'white',
-                                        display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+                                        display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', touchAction: 'manipulation',
                                     }}>
                                         {speakerOn ? <Volume2 size={22} /> : <VolumeX size={22} />}
                                     </button>
                                 </>
                             )}
-                            <button onClick={() => endCall(true, callState === 'ringing' ? 'rejected' : 'ended')} style={{
+                            <button onTouchEnd={(e) => { e.preventDefault(); endCall(true, callState === 'ringing' ? 'rejected' : 'ended'); }} onClick={() => endCall(true, callState === 'ringing' ? 'rejected' : 'ended')} style={{
                                 width: 64, height: 64, borderRadius: '50%',
                                 background: 'linear-gradient(135deg, #ef4444, #dc2626)',
                                 border: 'none', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                boxShadow: '0 8px 30px rgba(239,68,68,0.4)', cursor: 'pointer',
+                                boxShadow: '0 8px 30px rgba(239,68,68,0.4)', cursor: 'pointer', touchAction: 'manipulation',
                             }}>
                                 <PhoneOff size={28} />
                             </button>
@@ -1020,40 +1020,40 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
                     )}
                     <div style={{ display: 'flex', gap: 24, marginTop: 40, alignItems: 'center' }}>
                         {callState === 'ringing' && (
-                            <button onClick={() => callDocId && answerCall(callDocId)} style={{
+                            <button onTouchEnd={(e) => { e.preventDefault(); callDocId && answerCall(callDocId); }} onClick={() => callDocId && answerCall(callDocId)} style={{
                                 width: 64, height: 64, borderRadius: '50%',
                                 background: 'linear-gradient(135deg, #22c55e, #16a34a)',
                                 border: 'none', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                boxShadow: '0 8px 30px rgba(34,197,94,0.4)', animation: 'callBtnPulse 1.5s ease-in-out infinite', cursor: 'pointer',
+                                boxShadow: '0 8px 30px rgba(34,197,94,0.4)', animation: 'callBtnPulse 1.5s ease-in-out infinite', cursor: 'pointer', touchAction: 'manipulation',
                             }}><Phone size={28} /></button>
                         )}
                         {callState === 'connected' && (
                             <>
-                                <button onClick={toggleMute} style={{
+                                <button onTouchEnd={(e) => { e.preventDefault(); toggleMute(); }} onClick={toggleMute} style={{
                                     width: 52, height: 52, borderRadius: '50%',
                                     background: callMuted ? 'rgba(245,158,11,0.2)' : 'rgba(255,255,255,0.1)',
                                     border: callMuted ? '2px solid rgba(245,158,11,0.5)' : '2px solid rgba(255,255,255,0.2)',
                                     color: callMuted ? '#f59e0b' : 'white',
-                                    display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', touchAction: 'manipulation',
                                 }}>
                                     {callMuted ? <MicOff size={22} /> : <Mic size={22} />}
                                 </button>
-                                <button onClick={toggleSpeaker} style={{
+                                <button onTouchEnd={(e) => { e.preventDefault(); toggleSpeaker(); }} onClick={toggleSpeaker} style={{
                                     width: 52, height: 52, borderRadius: '50%',
                                     background: speakerOn ? 'rgba(59,130,246,0.2)' : 'rgba(255,255,255,0.1)',
                                     border: speakerOn ? '2px solid rgba(59,130,246,0.5)' : '2px solid rgba(255,255,255,0.2)',
                                     color: speakerOn ? '#3b82f6' : 'white',
-                                    display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer', touchAction: 'manipulation',
                                 }}>
                                     {speakerOn ? <Volume2 size={22} /> : <VolumeX size={22} />}
                                 </button>
                             </>
                         )}
-                        <button onClick={() => endCall(true, callState === 'ringing' ? 'rejected' : 'ended')} style={{
+                        <button onTouchEnd={(e) => { e.preventDefault(); endCall(true, callState === 'ringing' ? 'rejected' : 'ended'); }} onClick={() => endCall(true, callState === 'ringing' ? 'rejected' : 'ended')} style={{
                             width: 64, height: 64, borderRadius: '50%',
                             background: 'linear-gradient(135deg, #ef4444, #dc2626)',
                             border: 'none', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            boxShadow: '0 8px 30px rgba(239,68,68,0.4)', cursor: 'pointer',
+                            boxShadow: '0 8px 30px rgba(239,68,68,0.4)', cursor: 'pointer', touchAction: 'manipulation',
                         }}><PhoneOff size={28} /></button>
                     </div>
                     <style>{`
