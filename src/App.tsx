@@ -81,6 +81,7 @@ function AppInner({
     setRefreshKey: (fn: (k: number) => number) => void;
 }) {
     const { refreshRecords } = useAttendance();
+    const [chatActive, setChatActive] = useState(false);
 
     const handleRefresh = useCallback(async () => {
         await refreshRecords();
@@ -112,7 +113,7 @@ function AppInner({
             case 'notificationInbox':
                 return <NotificationInboxPage onBack={() => setCurrentPage('home')} />;
             case 'chat':
-                return <ChatPage onBack={() => setCurrentPage('home')} />;
+                return <ChatPage onBack={() => setCurrentPage('home')} onChatActive={setChatActive} />;
             default:
                 return <HomePage />;
         }
@@ -122,11 +123,11 @@ function AppInner({
         <>
             <div className="app-layout">
                 <div className="bg-pattern" />
-                <Header
+                {!chatActive && <Header
                     onNavigateProfile={() => setCurrentPage('profile')}
                     onNavigateNotifications={() => setCurrentPage('notificationInbox')}
                     onNavigateChat={() => setCurrentPage('chat')}
-                />
+                />}
                 <PullToRefresh onRefresh={handleRefresh}>
                     <div
                         key={`${currentPage}-${refreshKey}`}
@@ -139,7 +140,7 @@ function AppInner({
                         {renderPage()}
                     </div>
                 </PullToRefresh>
-                <BottomNav currentPage={currentPage} onPageChange={handlePageChange} />
+                {!chatActive && <BottomNav currentPage={currentPage} onPageChange={handlePageChange} />}
                 <InstallPrompt />
             </div>
             <style>{`

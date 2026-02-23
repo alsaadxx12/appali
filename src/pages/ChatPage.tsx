@@ -8,7 +8,7 @@ import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 interface ChatUser { id: string; name: string; avatar?: string; department?: string; online?: boolean; lastSeen?: Timestamp; }
 interface Message { id: string; text: string; senderId: string; senderName: string; createdAt: Timestamp | null; edited?: boolean; deleted?: boolean; type?: 'text' | 'image' | 'file' | 'location'; fileUrl?: string; fileName?: string; fileSize?: string; disappearAfter?: number; readBy?: Record<string, boolean>; location?: { lat: number; lng: number }; }
 interface Conversation { id: string; participants: string[]; participantNames: Record<string, string>; participantAvatars?: Record<string, string>; lastMessage?: string; lastMessageAt?: Timestamp; readBy?: Record<string, Timestamp>; lastSenderId?: string; }
-interface Props { onBack: () => void; }
+interface Props { onBack: () => void; onChatActive?: (active: boolean) => void; }
 
 const EMOJI_CATS = [
     { id: 's', icon: '😀', emojis: ['😀', '😂', '🤣', '😊', '😍', '🥰', '😘', '😜', '🤗', '😎', '🥳', '🤩', '😏', '😢', '😭', '😡', '🤯', '😴', '🤔', '🙄', '😱', '🤫', '🤐', '😷', '💀', '👻', '👽', '🤖', '💩', '🥺'] },
@@ -28,10 +28,15 @@ const BG_OPTIONS = [
     { id: 'warm', label: 'دافئ', bg: 'linear-gradient(180deg,rgba(120,53,15,0.12),rgba(245,158,11,0.06))' },
 ];
 
-export default function ChatPage({ onBack }: Props) {
+export default function ChatPage({ onBack, onChatActive }: Props) {
     const { user } = useAuth();
     const uid = user?.id || '';
     const [activeChat, setActiveChat] = useState<{ convId: string; otherUser: ChatUser } | null>(null);
+
+    // Notify parent when chat is opened/closed
+    React.useEffect(() => {
+        onChatActive?.(!!activeChat);
+    }, [activeChat, onChatActive]);
     const [convs, setConvs] = useState<Conversation[]>([]);
     const [allUsers, setAllUsers] = useState<ChatUser[]>([]);
     const [msgs, setMsgs] = useState<Message[]>([]);
@@ -260,12 +265,14 @@ export default function ChatPage({ onBack }: Props) {
             <div className="page-enter chat-root" style={{
                 display: 'flex',
                 flexDirection: 'column',
-                height: '100%',
-                maxHeight: '100%',
+                height: '100dvh',
+                maxHeight: '100dvh',
                 padding: 0,
                 overflow: 'hidden',
-                position: 'relative',
+                position: 'fixed',
+                top: 0, left: 0, right: 0, bottom: 0,
                 width: '100%',
+                zIndex: 1000,
                 background: bgVal.startsWith('linear') ? bgVal : undefined,
                 backgroundColor: !bgVal.startsWith('linear') ? (bgVal === 'transparent' ? 'var(--bg-primary)' : bgVal) : undefined,
             }}>
