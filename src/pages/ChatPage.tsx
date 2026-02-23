@@ -733,7 +733,7 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
                         {/* Call action buttons */}
                         <div style={{ display: 'flex', gap: 24, marginTop: 40, alignItems: 'center' }}>
                             {callState === 'ringing' && (
-                                <button onTouchEnd={(e) => { e.preventDefault(); callDocId && answerCall(callDocId); }} onClick={() => callDocId && answerCall(callDocId)} style={{
+                                <button onClick={() => callDocId && answerCall(callDocId)} style={{
                                     width: 64, height: 64, borderRadius: '50%',
                                     background: 'linear-gradient(135deg, #22c55e, #16a34a)',
                                     border: 'none', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -742,7 +742,7 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
                             )}
                             {callState === 'connected' && (
                                 <>
-                                    <button onTouchEnd={(e) => { e.preventDefault(); toggleMute(); }} onClick={toggleMute} style={{
+                                    <button onClick={toggleMute} style={{
                                         width: 52, height: 52, borderRadius: '50%',
                                         background: callMuted ? 'rgba(245,158,11,0.2)' : 'rgba(255,255,255,0.1)',
                                         border: callMuted ? '2px solid rgba(245,158,11,0.5)' : '2px solid rgba(255,255,255,0.2)',
@@ -751,7 +751,7 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
                                     }}>
                                         {callMuted ? <MicOff size={22} /> : <Mic size={22} />}
                                     </button>
-                                    <button onTouchEnd={(e) => { e.preventDefault(); toggleSpeaker(); }} onClick={toggleSpeaker} style={{
+                                    <button onClick={toggleSpeaker} style={{
                                         width: 52, height: 52, borderRadius: '50%',
                                         background: speakerOn ? 'rgba(59,130,246,0.2)' : 'rgba(255,255,255,0.1)',
                                         border: speakerOn ? '2px solid rgba(59,130,246,0.5)' : '2px solid rgba(255,255,255,0.2)',
@@ -762,7 +762,7 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
                                     </button>
                                 </>
                             )}
-                            <button onTouchEnd={(e) => { e.preventDefault(); endCall(true, callState === 'ringing' ? 'rejected' : 'ended'); }} onClick={() => endCall(true, callState === 'ringing' ? 'rejected' : 'ended')} style={{
+                            <button onClick={() => endCall(true, callState === 'ringing' ? 'rejected' : 'ended')} style={{
                                 width: 64, height: 64, borderRadius: '50%',
                                 background: 'linear-gradient(135deg, #ef4444, #dc2626)',
                                 border: 'none', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -1020,7 +1020,7 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
                     )}
                     <div style={{ display: 'flex', gap: 24, marginTop: 40, alignItems: 'center' }}>
                         {callState === 'ringing' && (
-                            <button onTouchEnd={(e) => { e.preventDefault(); callDocId && answerCall(callDocId); }} onClick={() => callDocId && answerCall(callDocId)} style={{
+                            <button onClick={() => callDocId && answerCall(callDocId)} style={{
                                 width: 64, height: 64, borderRadius: '50%',
                                 background: 'linear-gradient(135deg, #22c55e, #16a34a)',
                                 border: 'none', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -1029,7 +1029,7 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
                         )}
                         {callState === 'connected' && (
                             <>
-                                <button onTouchEnd={(e) => { e.preventDefault(); toggleMute(); }} onClick={toggleMute} style={{
+                                <button onClick={toggleMute} style={{
                                     width: 52, height: 52, borderRadius: '50%',
                                     background: callMuted ? 'rgba(245,158,11,0.2)' : 'rgba(255,255,255,0.1)',
                                     border: callMuted ? '2px solid rgba(245,158,11,0.5)' : '2px solid rgba(255,255,255,0.2)',
@@ -1038,7 +1038,7 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
                                 }}>
                                     {callMuted ? <MicOff size={22} /> : <Mic size={22} />}
                                 </button>
-                                <button onTouchEnd={(e) => { e.preventDefault(); toggleSpeaker(); }} onClick={toggleSpeaker} style={{
+                                <button onClick={toggleSpeaker} style={{
                                     width: 52, height: 52, borderRadius: '50%',
                                     background: speakerOn ? 'rgba(59,130,246,0.2)' : 'rgba(255,255,255,0.1)',
                                     border: speakerOn ? '2px solid rgba(59,130,246,0.5)' : '2px solid rgba(255,255,255,0.2)',
@@ -1049,7 +1049,7 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
                                 </button>
                             </>
                         )}
-                        <button onTouchEnd={(e) => { e.preventDefault(); endCall(true, callState === 'ringing' ? 'rejected' : 'ended'); }} onClick={() => endCall(true, callState === 'ringing' ? 'rejected' : 'ended')} style={{
+                        <button onClick={() => endCall(true, callState === 'ringing' ? 'rejected' : 'ended')} style={{
                             width: 64, height: 64, borderRadius: '50%',
                             background: 'linear-gradient(135deg, #ef4444, #dc2626)',
                             border: 'none', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center',
