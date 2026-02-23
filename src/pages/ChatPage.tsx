@@ -1,8 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ArrowRight, Send, Search, Users, MessageCircle, Loader2, Smile, Paperclip, Image as ImageIcon, X, Trash2, Edit3, Check, Clock, Download, FileText, Camera, EyeOff, CheckCheck, MapPin, Archive, UserCircle } from 'lucide-react';
+import { ArrowRight, Send, Search, Users, MessageCircle, Loader2, Smile, Paperclip, Image as ImageIcon, X, Trash2, Edit3, Check, Clock, Download, FileText, Camera, EyeOff, CheckCheck, MapPin, Archive, UserCircle, Phone, PhoneOff } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { db, storage } from '../firebase';
-import { collection, doc, getDocs, addDoc, query, where, onSnapshot, serverTimestamp, Timestamp, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
+import { collection, doc, getDocs, getDoc, addDoc, query, where, onSnapshot, serverTimestamp, Timestamp, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 
 interface ChatUser { id: string; name: string; avatar?: string; department?: string; online?: boolean; lastSeen?: Timestamp; }
@@ -69,12 +69,187 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
     const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
     const longPressTimer = useRef<any>(null);
 
+    // ========== Voice Call State ==========
+    const [callState, setCallState] = useState<'idle' | 'calling' | 'ringing' | 'connected'>('idle');
+    const [callDocId, setCallDocId] = useState<string | null>(null);
+    const [callPartner, setCallPartner] = useState<{ name: string; avatar?: string } | null>(null);
+    const [callDuration, setCallDuration] = useState(0);
+    const peerRef = useRef<RTCPeerConnection | null>(null);
+    const localStreamRef = useRef<MediaStream | null>(null);
+    const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
+    const callTimerRef = useRef<any>(null);
+    const callUnsubRef = useRef<(() => void) | null>(null);
+
     // Swipe-back gesture for active chat
     const chatSwipeX = useRef(0);
     const chatSwipeY = useRef(0);
     const chatSwiping = useRef(false);
     const handleChatSwipeStart = (e: React.TouchEvent) => { chatSwipeX.current = e.touches[0].clientX; chatSwipeY.current = e.touches[0].clientY; chatSwiping.current = true; };
     const handleChatSwipeEnd = (e: React.TouchEvent) => { if (!chatSwiping.current) return; chatSwiping.current = false; const dx = e.changedTouches[0].clientX - chatSwipeX.current; const dy = Math.abs(e.changedTouches[0].clientY - chatSwipeY.current); if (dx > 80 && dx > dy * 1.5) { setActiveChat(null); setShowEmoji(false); setEditMsg(null); setShowAttach(false); } };
+
+    // ========== Voice Call Functions ==========
+    const ICE_SERVERS = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:stun1.l.google.com:19302' }] };
+
+    const startCall = async (partner: { id: string; name: string; avatar?: string }) => {
+        if (!uid || !user || callState !== 'idle') return;
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+            localStreamRef.current = stream;
+            setCallPartner({ name: partner.name, avatar: partner.avatar });
+            setCallState('calling');
+            setCallDuration(0);
+
+            const pc = new RTCPeerConnection(ICE_SERVERS);
+            peerRef.current = pc;
+            stream.getTracks().forEach(t => pc.addTrack(t, stream));
+
+            pc.ontrack = (e) => {
+                if (remoteAudioRef.current) {
+                    remoteAudioRef.current.srcObject = e.streams[0];
+                    remoteAudioRef.current.play().catch(() => { });
+                }
+            };
+
+            // Create call doc
+            const callDoc = await addDoc(collection(db, 'calls'), {
+                callerId: uid,
+                callerName: user.name,
+                callerAvatar: user.avatar || '',
+                receiverId: partner.id,
+                receiverName: partner.name,
+                status: 'ringing',
+                createdAt: serverTimestamp(),
+            });
+            setCallDocId(callDoc.id);
+
+            // Collect ICE candidates
+            pc.onicecandidate = (e) => {
+                if (e.candidate) {
+                    addDoc(collection(db, 'calls', callDoc.id, 'callerCandidates'), e.candidate.toJSON());
+                }
+            };
+
+            // Create offer
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            await updateDoc(doc(db, 'calls', callDoc.id), { offer: { type: offer.type, sdp: offer.sdp } });
+
+            // Listen for answer
+            const unsub = onSnapshot(doc(db, 'calls', callDoc.id), (snap) => {
+                const data = snap.data();
+                if (!data) return;
+                if (data.status === 'answered' && data.answer && !pc.currentRemoteDescription) {
+                    pc.setRemoteDescription(new RTCSessionDescription(data.answer));
+                    setCallState('connected');
+                    callTimerRef.current = setInterval(() => setCallDuration(d => d + 1), 1000);
+                }
+                if (data.status === 'ended') {
+                    endCall(false);
+                }
+            });
+            callUnsubRef.current = unsub;
+
+            // Listen for receiver ICE candidates
+            onSnapshot(collection(db, 'calls', callDoc.id, 'receiverCandidates'), (snap) => {
+                snap.docChanges().forEach(change => {
+                    if (change.type === 'added') {
+                        pc.addIceCandidate(new RTCIceCandidate(change.doc.data()));
+                    }
+                });
+            });
+        } catch (e) {
+            console.error('startCall error:', e);
+            setCallState('idle');
+        }
+    };
+
+    const answerCall = async (callId: string) => {
+        if (!uid) return;
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+            localStreamRef.current = stream;
+
+            const pc = new RTCPeerConnection(ICE_SERVERS);
+            peerRef.current = pc;
+            stream.getTracks().forEach(t => pc.addTrack(t, stream));
+
+            pc.ontrack = (e) => {
+                if (remoteAudioRef.current) {
+                    remoteAudioRef.current.srcObject = e.streams[0];
+                    remoteAudioRef.current.play().catch(() => { });
+                }
+            };
+
+            // Get offer from Firestore
+            const callSnap = await getDoc(doc(db, 'calls', callId));
+            if (!callSnap.exists()) return;
+            const callData = callSnap.data();
+
+            pc.onicecandidate = (e) => {
+                if (e.candidate) {
+                    addDoc(collection(db, 'calls', callId, 'receiverCandidates'), e.candidate.toJSON());
+                }
+            };
+
+            await pc.setRemoteDescription(new RTCSessionDescription(callData.offer));
+            const answer = await pc.createAnswer();
+            await pc.setLocalDescription(answer);
+            await updateDoc(doc(db, 'calls', callId), { answer: { type: answer.type, sdp: answer.sdp }, status: 'answered' });
+
+            setCallState('connected');
+            callTimerRef.current = setInterval(() => setCallDuration(d => d + 1), 1000);
+
+            // Listen for caller ICE candidates
+            onSnapshot(collection(db, 'calls', callId, 'callerCandidates'), (snap) => {
+                snap.docChanges().forEach(change => {
+                    if (change.type === 'added') {
+                        pc.addIceCandidate(new RTCIceCandidate(change.doc.data()));
+                    }
+                });
+            });
+
+            // Listen for call end
+            const unsub = onSnapshot(doc(db, 'calls', callId), (snap) => {
+                if (snap.data()?.status === 'ended') endCall(false);
+            });
+            callUnsubRef.current = unsub;
+
+        } catch (e) {
+            console.error('answerCall error:', e);
+            setCallState('idle');
+        }
+    };
+
+    const endCall = async (notify = true) => {
+        if (callTimerRef.current) { clearInterval(callTimerRef.current); callTimerRef.current = null; }
+        if (callUnsubRef.current) { callUnsubRef.current(); callUnsubRef.current = null; }
+        if (peerRef.current) { peerRef.current.close(); peerRef.current = null; }
+        if (localStreamRef.current) { localStreamRef.current.getTracks().forEach(t => t.stop()); localStreamRef.current = null; }
+        if (notify && callDocId) {
+            try { await updateDoc(doc(db, 'calls', callDocId), { status: 'ended' }); } catch (e) { }
+        }
+        setCallState('idle');
+        setCallDocId(null);
+        setCallPartner(null);
+        setCallDuration(0);
+    };
+
+    // Listen for incoming calls
+    useEffect(() => {
+        if (!uid) return;
+        const q = query(collection(db, 'calls'), where('receiverId', '==', uid), where('status', '==', 'ringing'));
+        const unsub = onSnapshot(q, (snap) => {
+            snap.docChanges().forEach(change => {
+                if (change.type === 'added' && callState === 'idle') {
+                    const data = change.doc.data();
+                    setCallDocId(change.doc.id);
+                    setCallPartner({ name: data.callerName, avatar: data.callerAvatar });
+                    setCallState('ringing');
+                }
+            });
+        });
+        return () => unsub();
+    }, [uid, callState]);
 
     useEffect(() => { if (!uid) return; (async () => { try { const s = await getDocs(collection(db, 'users')); setAllUsers(s.docs.filter(d => d.id !== uid).map(d => ({ id: d.id, name: d.data().name || 'مستخدم', avatar: d.data().avatar, department: d.data().department, online: d.data().online === true, lastSeen: d.data().lastSeen }))); } catch (e) { } setUsersLoaded(true); })(); }, [uid]);
 
@@ -314,6 +489,7 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
                         <div style={{ fontSize: 10, color: otherOnline ? '#22c55e' : 'var(--text-muted)', fontWeight: 700 }}>{otherOnline ? 'متصل الآن' : fls(otherLastSeen)}</div>
                     </div>
                     <div style={{ display: 'flex', gap: 8 }}>
+                        <button onClick={() => startCall({ id: otherUser.id, name: otherUser.name, avatar: otherUser.avatar })} style={{ width: 34, height: 34, borderRadius: 10, background: 'rgba(34,197,94,0.15)', border: '1px solid rgba(34,197,94,0.3)', color: '#22c55e', display: 'flex', alignItems: 'center', justifyContent: 'center' }}><Phone size={16} /></button>
                         <button onClick={() => setShowDisappear(!showDisappear)} style={{ width: 34, height: 34, borderRadius: 10, background: disappear > 0 ? 'rgba(245,158,11,0.15)' : 'var(--bg-glass)', border: disappear > 0 ? '1px solid rgba(245,158,11,0.3)' : '1px solid var(--border-glass)', color: disappear > 0 ? '#f59e0b' : 'var(--text-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>{disappear > 0 ? <EyeOff size={16} /> : <Clock size={16} />}</button>
                     </div>
                     {showDisappear && <div style={{ position: 'absolute', top: 60, left: 16, zIndex: 110, background: 'var(--bg-card)', border: '1px solid var(--border-glass)', borderRadius: 20, padding: 8, minWidth: 160, boxShadow: '0 10px 40px rgba(0,0,0,0.4)', animation: 'fadeUp 0.15s ease' }}>
@@ -377,6 +553,105 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
                 <input ref={imgRef} type="file" accept="image/*" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) doUpload(f, 'image'); }} />
                 <input ref={fileRef} type="file" style={{ display: 'none' }} onChange={e => { const f = e.target.files?.[0]; if (f) doUpload(f, 'file'); }} />
                 {imgPreview && <div onClick={() => setImgPreview(null)} style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.95)', zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center' }}><img src={imgPreview} alt="" style={{ maxWidth: '95%', maxHeight: '85dvh', borderRadius: 12 }} /></div>}
+
+                {/* Voice Call Overlay */}
+                {callState !== 'idle' && callPartner && (
+                    <div style={{
+                        position: 'fixed', inset: 0, zIndex: 10000,
+                        background: 'linear-gradient(180deg, #0f172a 0%, #1e1b4b 40%, #312e81 100%)',
+                        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                        gap: 24, animation: 'fadeIn 0.3s ease',
+                    }}>
+                        {/* Animated rings */}
+                        <div style={{ position: 'absolute', width: 200, height: 200, borderRadius: '50%', border: '1px solid rgba(99,102,241,0.15)', animation: 'callRing1 2s ease-out infinite' }} />
+                        <div style={{ position: 'absolute', width: 260, height: 260, borderRadius: '50%', border: '1px solid rgba(99,102,241,0.08)', animation: 'callRing2 2s ease-out 0.5s infinite' }} />
+
+                        {/* Avatar */}
+                        <div style={{
+                            width: 100, height: 100, borderRadius: '50%',
+                            background: callPartner.avatar ? `url(${callPartner.avatar}) center/cover` : 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            color: 'white', fontSize: 32, fontWeight: 900,
+                            border: '3px solid rgba(255,255,255,0.2)',
+                            boxShadow: '0 0 40px rgba(99,102,241,0.4)',
+                        }}>
+                            {!callPartner.avatar && gi(callPartner.name)}
+                        </div>
+
+                        {/* Name */}
+                        <div style={{ textAlign: 'center' }}>
+                            <div style={{ fontSize: 22, fontWeight: 900, color: 'white', marginBottom: 6 }}>{callPartner.name}</div>
+                            <div style={{ fontSize: 14, fontWeight: 700, color: callState === 'connected' ? '#22c55e' : 'rgba(255,255,255,0.5)' }}>
+                                {callState === 'calling' && 'جاري الاتصال...'}
+                                {callState === 'ringing' && 'مكالمة واردة'}
+                                {callState === 'connected' && `${Math.floor(callDuration / 60).toString().padStart(2, '0')}:${(callDuration % 60).toString().padStart(2, '0')}`}
+                            </div>
+                        </div>
+
+                        {/* Calling animation dots */}
+                        {callState === 'calling' && (
+                            <div style={{ display: 'flex', gap: 8 }}>
+                                {[0, 1, 2].map(i => (
+                                    <div key={i} style={{
+                                        width: 8, height: 8, borderRadius: '50%', background: '#6366f1',
+                                        animation: `callDot 1.4s ease-in-out ${i * 0.2}s infinite`,
+                                    }} />
+                                ))}
+                            </div>
+                        )}
+
+                        {/* Buttons */}
+                        <div style={{ display: 'flex', gap: 32, marginTop: 40 }}>
+                            {callState === 'ringing' && (
+                                <button onClick={() => callDocId && answerCall(callDocId)} style={{
+                                    width: 64, height: 64, borderRadius: '50%',
+                                    background: 'linear-gradient(135deg, #22c55e, #16a34a)',
+                                    border: 'none', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                    boxShadow: '0 8px 30px rgba(34,197,94,0.4)',
+                                    animation: 'callBtnPulse 1.5s ease-in-out infinite',
+                                    cursor: 'pointer',
+                                }}>
+                                    <Phone size={28} />
+                                </button>
+                            )}
+                            <button onClick={() => endCall()} style={{
+                                width: 64, height: 64, borderRadius: '50%',
+                                background: 'linear-gradient(135deg, #ef4444, #dc2626)',
+                                border: 'none', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                boxShadow: '0 8px 30px rgba(239,68,68,0.4)',
+                                cursor: 'pointer',
+                            }}>
+                                <PhoneOff size={28} />
+                            </button>
+                        </div>
+
+                        <style>{`
+                            @keyframes callRing1 {
+                                0% { transform: scale(0.8); opacity: 0.6; }
+                                100% { transform: scale(1.6); opacity: 0; }
+                            }
+                            @keyframes callRing2 {
+                                0% { transform: scale(0.8); opacity: 0.4; }
+                                100% { transform: scale(1.8); opacity: 0; }
+                            }
+                            @keyframes callDot {
+                                0%, 80%, 100% { transform: scale(0.6); opacity: 0.3; }
+                                40% { transform: scale(1.2); opacity: 1; }
+                            }
+                            @keyframes callBtnPulse {
+                                0%, 100% { box-shadow: 0 8px 30px rgba(34,197,94,0.4); }
+                                50% { box-shadow: 0 8px 40px rgba(34,197,94,0.7); }
+                            }
+                            @keyframes fadeIn {
+                                from { opacity: 0; }
+                                to { opacity: 1; }
+                            }
+                        `}</style>
+                    </div>
+                )}
+
+                {/* Remote audio for WebRTC */}
+                <audio ref={remoteAudioRef} autoPlay playsInline style={{ display: 'none' }} />
             </div>
         );
     }
@@ -539,6 +814,68 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
                     </div>
                 </div>
             )}
+
+            {/* Voice Call Overlay (chat list context) */}
+            {callState !== 'idle' && callPartner && (
+                <div style={{
+                    position: 'fixed', inset: 0, zIndex: 10000,
+                    background: 'linear-gradient(180deg, #0f172a 0%, #1e1b4b 40%, #312e81 100%)',
+                    display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                    gap: 24, animation: 'fadeIn 0.3s ease',
+                }}>
+                    <div style={{ position: 'absolute', width: 200, height: 200, borderRadius: '50%', border: '1px solid rgba(99,102,241,0.15)', animation: 'callRing1 2s ease-out infinite' }} />
+                    <div style={{ position: 'absolute', width: 260, height: 260, borderRadius: '50%', border: '1px solid rgba(99,102,241,0.08)', animation: 'callRing2 2s ease-out 0.5s infinite' }} />
+                    <div style={{
+                        width: 100, height: 100, borderRadius: '50%',
+                        background: callPartner.avatar ? `url(${callPartner.avatar}) center/cover` : 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        color: 'white', fontSize: 32, fontWeight: 900,
+                        border: '3px solid rgba(255,255,255,0.2)',
+                        boxShadow: '0 0 40px rgba(99,102,241,0.4)',
+                    }}>
+                        {!callPartner.avatar && gi(callPartner.name)}
+                    </div>
+                    <div style={{ textAlign: 'center' }}>
+                        <div style={{ fontSize: 22, fontWeight: 900, color: 'white', marginBottom: 6 }}>{callPartner.name}</div>
+                        <div style={{ fontSize: 14, fontWeight: 700, color: callState === 'connected' ? '#22c55e' : 'rgba(255,255,255,0.5)' }}>
+                            {callState === 'calling' && 'جاري الاتصال...'}
+                            {callState === 'ringing' && 'مكالمة واردة'}
+                            {callState === 'connected' && `${Math.floor(callDuration / 60).toString().padStart(2, '0')}:${(callDuration % 60).toString().padStart(2, '0')}`}
+                        </div>
+                    </div>
+                    {callState === 'calling' && (
+                        <div style={{ display: 'flex', gap: 8 }}>
+                            {[0, 1, 2].map(i => (
+                                <div key={i} style={{ width: 8, height: 8, borderRadius: '50%', background: '#6366f1', animation: `callDot 1.4s ease-in-out ${i * 0.2}s infinite` }} />
+                            ))}
+                        </div>
+                    )}
+                    <div style={{ display: 'flex', gap: 32, marginTop: 40 }}>
+                        {callState === 'ringing' && (
+                            <button onClick={() => callDocId && answerCall(callDocId)} style={{
+                                width: 64, height: 64, borderRadius: '50%',
+                                background: 'linear-gradient(135deg, #22c55e, #16a34a)',
+                                border: 'none', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                boxShadow: '0 8px 30px rgba(34,197,94,0.4)', animation: 'callBtnPulse 1.5s ease-in-out infinite', cursor: 'pointer',
+                            }}><Phone size={28} /></button>
+                        )}
+                        <button onClick={() => endCall()} style={{
+                            width: 64, height: 64, borderRadius: '50%',
+                            background: 'linear-gradient(135deg, #ef4444, #dc2626)',
+                            border: 'none', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            boxShadow: '0 8px 30px rgba(239,68,68,0.4)', cursor: 'pointer',
+                        }}><PhoneOff size={28} /></button>
+                    </div>
+                    <style>{`
+                        @keyframes callRing1 { 0% { transform: scale(0.8); opacity: 0.6; } 100% { transform: scale(1.6); opacity: 0; } }
+                        @keyframes callRing2 { 0% { transform: scale(0.8); opacity: 0.4; } 100% { transform: scale(1.8); opacity: 0; } }
+                        @keyframes callDot { 0%, 80%, 100% { transform: scale(0.6); opacity: 0.3; } 40% { transform: scale(1.2); opacity: 1; } }
+                        @keyframes callBtnPulse { 0%, 100% { box-shadow: 0 8px 30px rgba(34,197,94,0.4); } 50% { box-shadow: 0 8px 40px rgba(34,197,94,0.7); } }
+                        @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+                    `}</style>
+                </div>
+            )}
+            <audio ref={remoteAudioRef} autoPlay playsInline style={{ display: 'none' }} />
         </div>
     );
 }
