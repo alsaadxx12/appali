@@ -132,9 +132,10 @@ function AppInner({
                     <div
                         key={`${currentPage}-${refreshKey}`}
                         style={{
-                            animation: 'pageIn 0.3s ease-out both',
+                            animation: chatActive ? 'none' : 'pageIn 0.3s ease-out both',
                             flex: 1,
-                            overflow: 'auto',
+                            overflow: chatActive ? 'hidden' : 'auto',
+                            height: chatActive ? '100%' : undefined,
                         }}
                     >
                         {renderPage()}

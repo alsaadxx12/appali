@@ -83,6 +83,7 @@ export default function PullToRefresh({ onRefresh, children }: PullToRefreshProp
                     ? `translateY(${refreshing ? 48 : pullDistance}px)`
                     : 'none',
                 transition: pulling ? 'none' : 'transform 200ms ease',
+                height: '100%',
             }}>
                 {children}
             </div>
