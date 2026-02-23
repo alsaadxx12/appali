@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { ThemeProvider } from './context/ThemeContext';
 import { AttendanceProvider, useAttendance } from './context/AttendanceContext';
@@ -96,6 +96,34 @@ function AppInner({
         }
     }, [currentPage, refreshRecords, setCurrentPage, setRefreshKey]);
 
+    // ========== Swipe-back gesture ==========
+    const swipeStartX = useRef(0);
+    const swipeStartY = useRef(0);
+    const swiping = useRef(false);
+
+    const handleSwipeStart = useCallback((e: React.TouchEvent) => {
+        swipeStartX.current = e.touches[0].clientX;
+        swipeStartY.current = e.touches[0].clientY;
+        swiping.current = true;
+    }, []);
+
+    const handleSwipeEnd = useCallback((e: React.TouchEvent) => {
+        if (!swiping.current) return;
+        swiping.current = false;
+        const dx = e.changedTouches[0].clientX - swipeStartX.current;
+        const dy = Math.abs(e.changedTouches[0].clientY - swipeStartY.current);
+        // Must swipe at least 80px horizontally and more horizontal than vertical
+        if (dx > 80 && dx > dy * 1.5) {
+            // Swipe right → go back
+            if (chatActive) return; // ChatPage handles its own internal swipe
+            if (currentPage === 'chat') {
+                setCurrentPage('home');
+            } else if (currentPage !== 'home') {
+                setCurrentPage('home');
+            }
+        }
+    }, [chatActive, currentPage, setCurrentPage]);
+
     const renderPage = () => {
         switch (currentPage) {
             case 'home':
@@ -131,6 +159,8 @@ function AppInner({
                 <PullToRefresh onRefresh={handleRefresh}>
                     <div
                         key={`${currentPage}-${refreshKey}`}
+                        onTouchStart={handleSwipeStart}
+                        onTouchEnd={handleSwipeEnd}
                         style={{
                             animation: chatActive ? 'none' : 'pageIn 0.3s ease-out both',
                             flex: 1,

@@ -68,6 +68,13 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
     const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
     const longPressTimer = useRef<any>(null);
 
+    // Swipe-back gesture for active chat
+    const chatSwipeX = useRef(0);
+    const chatSwipeY = useRef(0);
+    const chatSwiping = useRef(false);
+    const handleChatSwipeStart = (e: React.TouchEvent) => { chatSwipeX.current = e.touches[0].clientX; chatSwipeY.current = e.touches[0].clientY; chatSwiping.current = true; };
+    const handleChatSwipeEnd = (e: React.TouchEvent) => { if (!chatSwiping.current) return; chatSwiping.current = false; const dx = e.changedTouches[0].clientX - chatSwipeX.current; const dy = Math.abs(e.changedTouches[0].clientY - chatSwipeY.current); if (dx > 80 && dx > dy * 1.5) { setActiveChat(null); setShowEmoji(false); setEditMsg(null); setShowAttach(false); } };
+
     useEffect(() => { if (!uid) return; (async () => { try { const s = await getDocs(collection(db, 'users')); setAllUsers(s.docs.filter(d => d.id !== uid).map(d => ({ id: d.id, name: d.data().name || 'مستخدم', avatar: d.data().avatar, department: d.data().department, online: d.data().online === true, lastSeen: d.data().lastSeen }))); } catch (e) { } setUsersLoaded(true); })(); }, [uid]);
 
     useEffect(() => {
@@ -298,7 +305,7 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
                 {disappear > 0 && <div style={{ padding: '8px', background: 'rgba(245,158,11,0.1)', color: '#f59e0b', fontSize: 11, fontWeight: 800, textAlign: 'center', borderBottom: '1px solid rgba(245,158,11,0.1)' }}>⚠️ الرسائل ستختفي تلقائياً بعد {DISAPPEAR.find(x => x.v === disappear)?.l}</div>}
 
                 {/* Messages area */}
-                <div className="chat-msgs" style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: 12, overscrollBehavior: 'contain' }}>
+                <div className="chat-msgs" onTouchStart={handleChatSwipeStart} onTouchEnd={handleChatSwipeEnd} style={{ flex: 1, overflowY: 'auto', padding: '16px', display: 'flex', flexDirection: 'column', gap: 12, overscrollBehavior: 'contain' }}>
                     {msgs.length === 0 && <div style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', opacity: 0.4 }}><div style={{ width: 80, height: 80, borderRadius: 30, background: 'var(--bg-glass)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 16 }}><MessageCircle size={40} /></div><div style={{ fontSize: 16, fontWeight: 800 }}>ابدأ المحادثة مع {otherUser.name.split(' ')[0]}</div></div>}
                     {msgs.map(msg => {
                         const isMe = msg.senderId === uid, isDel = msg.deleted === true;
