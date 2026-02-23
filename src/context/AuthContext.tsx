@@ -114,13 +114,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                     setIsNewUser(true);
                     setNeedsBiometric(false);
                 } else if (firestoreData && firestoreData.profileComplete && !firestoreData.biometricComplete) {
-                    // Double-check biometrics in Firestore subcollection
-                    const [faceSnap, irisSnap] = await Promise.all([
-                        getDoc(doc(db, 'users', fbUser.uid, 'biometrics', 'face')),
-                        getDoc(doc(db, 'users', fbUser.uid, 'biometrics', 'iris')),
-                    ]);
-                    if (faceSnap.exists() && irisSnap.exists()) {
-                        // Fix: biometrics exist but flag wasn't set
+                    // Double-check biometrics in Firestore subcollection (face only)
+                    const faceSnap = await getDoc(doc(db, 'users', fbUser.uid, 'biometrics', 'face_front'));
+                    if (faceSnap.exists()) {
+                        // Face biometric exists but flag wasn't set — fix it
                         await saveUserToFirestore(fbUser.uid, { biometricComplete: true });
                         setIsNewUser(false);
                         setNeedsBiometric(false);
@@ -285,14 +282,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
             // Check biometric status from Firestore
             if (firestoreData?.profileComplete && !firestoreData?.biometricComplete) {
-                // Check if biometrics actually exist in Firestore subcollection
-                const [faceSnap, irisSnap] = await Promise.all([
-                    getDoc(doc(db, 'users', fbUser.uid, 'biometrics', 'face')),
-                    getDoc(doc(db, 'users', fbUser.uid, 'biometrics', 'iris')),
-                ]);
-                const hasBoth = faceSnap.exists() && irisSnap.exists();
-                if (hasBoth) {
-                    // Biometrics exist but flag wasn't set — fix it
+                // Check if face biometric actually exists in Firestore subcollection
+                const faceSnap = await getDoc(doc(db, 'users', fbUser.uid, 'biometrics', 'face_front'));
+                if (faceSnap.exists()) {
+                    // Face biometric exists but flag wasn't set — fix it
                     await saveUserToFirestore(fbUser.uid, { biometricComplete: true });
                     setIsNewUser(false);
                     setNeedsBiometric(false);

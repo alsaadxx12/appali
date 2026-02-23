@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
     ArrowRight, Lock, ShieldCheck, ShieldAlert,
-    CheckCircle, XCircle, Loader2, Camera, Eye, User
+    CheckCircle, XCircle, Loader2, Camera, User
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 import {
@@ -11,7 +11,7 @@ import {
     BiometricSettings,
 } from '../../utils/biometricAuth';
 import {
-    loadBiometricFromFirestore,
+    isFaceAngleRegistered,
 } from '../../utils/faceAuth';
 
 interface Props {
@@ -23,13 +23,9 @@ export default function BiometricSettingsPage({ onBack }: Props) {
     const [settings, setSettings] = useState<BiometricSettings>({ enabled: false, required: false });
     const [loading, setLoading] = useState(true);
 
-    // Face & Iris status (read-only)
+    // Face status (read-only)
     const [hasFace, setHasFace] = useState(false);
-    const [hasIris, setHasIris] = useState(false);
-    const [facePhoto, setFacePhoto] = useState<string | null>(null);
-    const [irisPhoto, setIrisPhoto] = useState<string | null>(null);
-    const [faceInfo, setFaceInfo] = useState<{ registeredAt?: string; frameCount?: number } | null>(null);
-    const [irisInfo, setIrisInfo] = useState<{ registeredAt?: string; frameCount?: number } | null>(null);
+    const [faceAngles, setFaceAngles] = useState<{ front: boolean; right: boolean; left: boolean }>({ front: false, right: false, left: false });
 
     const isAdmin = user?.role === 'admin';
     const userId = user?.id || '';
@@ -43,28 +39,13 @@ export default function BiometricSettingsPage({ onBack }: Props) {
             setSettings(savedSettings);
 
             if (userId) {
-                const [faceData, irisData] = await Promise.all([
-                    loadBiometricFromFirestore(userId, 'face'),
-                    loadBiometricFromFirestore(userId, 'iris'),
+                const [front, right, left] = await Promise.all([
+                    isFaceAngleRegistered(userId, 'front'),
+                    isFaceAngleRegistered(userId, 'right'),
+                    isFaceAngleRegistered(userId, 'left'),
                 ]);
-
-                if (faceData) {
-                    setHasFace(true);
-                    setFacePhoto(faceData.photoURL || faceData.photo || null);
-                    setFaceInfo({
-                        registeredAt: faceData.registeredAt || faceData.timestamp,
-                        frameCount: faceData.frameCount,
-                    });
-                }
-
-                if (irisData) {
-                    setHasIris(true);
-                    setIrisPhoto(irisData.photoURL || irisData.photo || null);
-                    setIrisInfo({
-                        registeredAt: irisData.registeredAt || irisData.timestamp,
-                        frameCount: irisData.frameCount,
-                    });
-                }
+                setFaceAngles({ front, right, left });
+                setHasFace(front || right || left);
             }
         } catch (e) {
             console.error('Error loading biometric settings:', e);
@@ -176,24 +157,18 @@ export default function BiometricSettingsPage({ onBack }: Props) {
             {/* Biometric Status (Read-Only) */}
             <div style={{ fontSize: 14, fontWeight: 800, marginBottom: 10 }}>حالة البيانات البيومترية</div>
 
-            {/* Face Status */}
+            {/* Face Status — 3 angles */}
             <div className="glass-card" style={{ padding: '16px', marginBottom: 12 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                    {facePhoto ? (
-                        <img src={facePhoto} alt="" style={{
-                            width: 52, height: 52, borderRadius: '50%',
-                            objectFit: 'cover', border: '2px solid rgba(16,185,129,0.3)',
-                        }} />
-                    ) : (
-                        <div style={{
-                            width: 52, height: 52, borderRadius: '50%',
-                            background: 'var(--bg-glass-strong)',
-                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            color: 'var(--text-muted)', border: '2px solid var(--border-glass)',
-                        }}>
-                            <Camera size={22} />
-                        </div>
-                    )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 12 }}>
+                    <div style={{
+                        width: 52, height: 52, borderRadius: '50%',
+                        background: hasFace ? 'linear-gradient(135deg, rgba(16,185,129,0.15), rgba(20,184,166,0.1))' : 'var(--bg-glass-strong)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        color: hasFace ? 'var(--accent-emerald)' : 'var(--text-muted)',
+                        border: `2px solid ${hasFace ? 'rgba(16,185,129,0.3)' : 'var(--border-glass)'}`,
+                    }}>
+                        <Camera size={22} />
+                    </div>
                     <div style={{ flex: 1 }}>
                         <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
                             <div style={{ fontSize: 14, fontWeight: 700 }}>بصمة الوجه</div>
@@ -204,55 +179,26 @@ export default function BiometricSettingsPage({ onBack }: Props) {
                             )}
                         </div>
                         <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                            {hasFace ? 'مسجلة ✅' : 'غير مسجلة — سيُطلب التسجيل عند إنشاء الحساب'}
+                            {hasFace ? 'مسجلة ✅ — يتم تخزين embeddings فقط (بدون صور)' : 'غير مسجلة — سيُطلب التسجيل عند إنشاء الحساب'}
                         </div>
-                        {faceInfo?.registeredAt && (
-                            <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>
-                                📅 {new Date(faceInfo.registeredAt).toLocaleDateString('ar-IQ')}
-                                {faceInfo.frameCount && ` • ${faceInfo.frameCount} إطار`}
-                            </div>
-                        )}
                     </div>
                 </div>
-            </div>
-
-            {/* Iris Status */}
-            <div className="glass-card" style={{ padding: '16px', marginBottom: 16 }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-                    {irisPhoto ? (
-                        <img src={irisPhoto} alt="" style={{
-                            width: 52, height: 52, borderRadius: '50%',
-                            objectFit: 'cover', border: '2px solid rgba(16,185,129,0.3)',
-                        }} />
-                    ) : (
-                        <div style={{
-                            width: 52, height: 52, borderRadius: '50%',
-                            background: 'var(--bg-glass-strong)',
-                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            color: 'var(--text-muted)', border: '2px solid var(--border-glass)',
+                {/* Angle breakdown */}
+                <div style={{ display: 'flex', gap: 8 }}>
+                    {(['front', 'right', 'left'] as const).map(angle => (
+                        <div key={angle} style={{
+                            flex: 1, padding: '8px', textAlign: 'center', borderRadius: 10,
+                            background: faceAngles[angle] ? 'rgba(16,185,129,0.06)' : 'var(--bg-glass)',
+                            border: `1px solid ${faceAngles[angle] ? 'rgba(16,185,129,0.2)' : 'var(--border-glass)'}`,
                         }}>
-                            <Eye size={22} />
-                        </div>
-                    )}
-                    <div style={{ flex: 1 }}>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4 }}>
-                            <div style={{ fontSize: 14, fontWeight: 700 }}>قزحية العين</div>
-                            {hasIris ? (
-                                <CheckCircle size={16} color="#10b981" />
-                            ) : (
-                                <XCircle size={16} color="#f43f5e" />
-                            )}
-                        </div>
-                        <div style={{ fontSize: 11, color: 'var(--text-muted)' }}>
-                            {hasIris ? 'مسجلة ✅' : 'غير مسجلة — سيُطلب التسجيل عند إنشاء الحساب'}
-                        </div>
-                        {irisInfo?.registeredAt && (
-                            <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>
-                                📅 {new Date(irisInfo.registeredAt).toLocaleDateString('ar-IQ')}
-                                {irisInfo.frameCount && ` • ${irisInfo.frameCount} إطار`}
+                            <div style={{ fontSize: 16, marginBottom: 2 }}>
+                                {faceAngles[angle] ? '✅' : angle === 'front' ? '😐' : angle === 'right' ? '👉' : '👈'}
                             </div>
-                        )}
-                    </div>
+                            <div style={{ fontSize: 10, fontWeight: 700, color: faceAngles[angle] ? '#10b981' : 'var(--text-muted)' }}>
+                                {angle === 'front' ? 'أمام' : angle === 'right' ? 'يمين' : 'يسار'}
+                            </div>
+                        </div>
+                    ))}
                 </div>
             </div>
 
@@ -263,8 +209,8 @@ export default function BiometricSettingsPage({ onBack }: Props) {
             }}>
                 <User size={18} style={{ color: 'var(--accent-blue)', flexShrink: 0, marginTop: 2 }} />
                 <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.8 }}>
-                    يتم تسجيل بصمة الوجه وقزحية العين تلقائياً عند إنشاء حساب الموظف.
-                    لا يمكن تعديلها أو حذفها من هنا لضمان أمان البيانات.
+                    يتم تسجيل بصمة الوجه (3 زوايا) عند إنشاء حساب الموظف.
+                    لا يتم تخزين أي صور — فقط embeddings رقمية مشفّرة.
                 </div>
             </div>
         </div>

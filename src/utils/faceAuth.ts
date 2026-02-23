@@ -9,19 +9,11 @@
  */
 
 import * as faceapi from 'face-api.js';
-import { db, storage } from '../firebase';
+import { db } from '../firebase';
 import { doc, setDoc, getDoc } from 'firebase/firestore';
-import { ref, uploadString, getDownloadURL } from 'firebase/storage';
 
 const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights';
 const FACE_KEY = 'face_data_';
-
-// Upload photo to Firebase Storage and return download URL
-async function uploadPhotoToStorage(userId: string, type: 'face' | 'iris', base64Photo: string): Promise<string> {
-    const storageRef = ref(storage, `biometrics/${userId}/${type}.jpg`);
-    await uploadString(storageRef, base64Photo, 'data_url');
-    return await getDownloadURL(storageRef);
-}
 
 let modelsLoaded = false;
 let modelsLoading = false;
@@ -432,7 +424,204 @@ export function calculateAdvancedLivenessScore(tracker: LivenessTracker): {
 }
 
 // ============================================================
-// Register Face (with averaging multiple frames for better accuracy)
+// Multi-Angle Face Registration System
+// ============================================================
+
+export type FaceAngle = 'front' | 'left' | 'right';
+
+export interface MultiAngleFaceData {
+    descriptor: number[];
+    angle: FaceAngle;
+    registeredAt: string;
+    frameCount?: number;
+}
+
+export interface RegisterAngleOptions {
+    userId: string;
+    video: HTMLVideoElement;
+    angle: FaceAngle;
+    onProgress?: (step: string, progress: number) => void;
+}
+
+// ============================================================
+// Register a SINGLE angle (called 3x: front, left, right)
+// Stores into face_front / face_left / face_right Firestore docs
+// ============================================================
+
+export async function registerFaceAngle({
+    userId,
+    video,
+    angle,
+    onProgress,
+}: RegisterAngleOptions): Promise<{ success: boolean; error?: string; descriptor?: number[] }> {
+    try {
+        const loaded = await loadFaceModels();
+        if (!loaded) return { success: false, error: 'فشل تحميل نماذج التعرف' };
+
+        const angleLabels: Record<FaceAngle, string> = {
+            front: 'الأمام',
+            left: 'اليسار',
+            right: 'اليمين',
+        };
+        const label = angleLabels[angle];
+
+        onProgress?.(`جاري التقاط وجه من ${label}...`, 20);
+
+        // Capture 4 frames per angle and average them
+        const descriptors: Float32Array[] = [];
+        for (let i = 0; i < 4; i++) {
+            const frame = await detectFace(video);
+            if (frame) descriptors.push(frame.descriptor);
+            onProgress?.(`التقاط إطار ${i + 1}/4 (${label})`, 25 + i * 15);
+            await new Promise(r => setTimeout(r, 600));
+        }
+
+        if (descriptors.length < 2) {
+            return { success: false, error: `لم يتم اكتشاف وجه من ${label}. تأكد من الإضاءة.` };
+        }
+
+        // Average descriptors for stability
+        const avgDescriptor = new Float32Array(128);
+        for (const d of descriptors) {
+            for (let j = 0; j < 128; j++) avgDescriptor[j] += d[j];
+        }
+        for (let j = 0; j < 128; j++) avgDescriptor[j] /= descriptors.length;
+        const descriptorArray = Array.from(avgDescriptor);
+
+        onProgress?.('حفظ بيانات التعرف...', 85);
+
+        // Save ONLY embedding (no photos) — angle-specific Firestore doc
+        const docData: MultiAngleFaceData = {
+            descriptor: descriptorArray,
+            angle,
+            registeredAt: new Date().toISOString(),
+            frameCount: descriptors.length,
+        };
+        try {
+            await setDoc(doc(db, 'users', userId, 'biometrics', `face_${angle}`), docData);
+            console.log(`✅ Face embedding "${angle}" saved to Firestore (no photo)`);
+        } catch (e: any) {
+            console.error(`❌ Failed to save face_${angle}:`, e?.message);
+            return { success: false, error: `فشل حفظ زاوية ${label} في قاعدة البيانات` };
+        }
+
+        // Cache embedding locally per-angle
+        localStorage.setItem(`${FACE_KEY}${userId}_${angle}`, JSON.stringify({
+            descriptor: descriptorArray,
+            angle,
+            registeredAt: new Date().toISOString(),
+        }));
+
+        // Front angle: also update legacy face doc for backward compat
+        if (angle === 'front') {
+            localStorage.setItem(FACE_KEY + userId, JSON.stringify({
+                descriptor: descriptorArray,
+                registeredAt: new Date().toISOString(),
+                frameCount: descriptors.length,
+            }));
+            try {
+                await setDoc(doc(db, 'users', userId, 'biometrics', 'face'), {
+                    descriptor: descriptorArray,
+                    registeredAt: new Date().toISOString(),
+                    frameCount: descriptors.length,
+                    locked: true, multiAngle: true,
+                });
+            } catch (e) {
+                console.warn('Could not update legacy face doc:', e);
+            }
+        }
+
+        onProgress?.('تم!', 100);
+        return { success: true, descriptor: descriptorArray };
+    } catch (err: any) {
+        console.error('registerFaceAngle error:', err);
+        return { success: false, error: err.message || 'فشل التسجيل' };
+    }
+}
+
+// ============================================================
+// Check if a specific angle is registered in Firestore
+// ============================================================
+
+export async function isFaceAngleRegistered(userId: string, angle: FaceAngle): Promise<boolean> {
+    try {
+        const d = await getDoc(doc(db, 'users', userId, 'biometrics', `face_${angle}`));
+        return d.exists();
+    } catch {
+        return false;
+    }
+}
+
+// ============================================================
+// Load ALL stored angle descriptors for a user (for verification)
+// ============================================================
+
+export async function loadAllFaceDescriptors(userId: string): Promise<Array<{
+    angle: FaceAngle;
+    descriptor: Float32Array;
+}>> {
+    const angles: FaceAngle[] = ['front', 'left', 'right'];
+    const results: Array<{ angle: FaceAngle; descriptor: Float32Array }> = [];
+
+    for (const angle of angles) {
+        // Try localStorage cache first
+        const cacheKey = `${FACE_KEY}${userId}_${angle}`;
+        const cached = localStorage.getItem(cacheKey);
+        if (cached) {
+            try {
+                const data = JSON.parse(cached);
+                if (Array.isArray(data.descriptor) && data.descriptor.length === 128) {
+                    results.push({ angle, descriptor: new Float32Array(data.descriptor) });
+                    continue;
+                }
+            } catch { /* ignore */ }
+        }
+
+        // Load from Firestore
+        try {
+            const snap = await getDoc(doc(db, 'users', userId, 'biometrics', `face_${angle}`));
+            if (snap.exists()) {
+                const data = snap.data() as MultiAngleFaceData;
+                if (Array.isArray(data.descriptor) && data.descriptor.length === 128) {
+                    const descriptor = new Float32Array(data.descriptor);
+                    localStorage.setItem(cacheKey, JSON.stringify({
+                        descriptor: data.descriptor, angle,
+                        registeredAt: data.registeredAt,
+                    }));
+                    results.push({ angle, descriptor });
+                }
+            }
+        } catch (e) {
+            console.warn(`Could not load face_${angle}:`, e);
+        }
+    }
+
+    // Fallback: if no multi-angle data found, try legacy face doc
+    if (results.length === 0) {
+        try {
+            const legacy = localStorage.getItem(FACE_KEY + userId);
+            if (legacy) {
+                const data = JSON.parse(legacy);
+                if (Array.isArray(data.descriptor) && data.descriptor.length === 128) {
+                    results.push({ angle: 'front', descriptor: new Float32Array(data.descriptor) });
+                }
+            } else {
+                const snap = await getDoc(doc(db, 'users', userId, 'biometrics', 'face'));
+                if (snap.exists()) {
+                    const data = snap.data() as any;
+                    if (Array.isArray(data.descriptor) && data.descriptor.length === 128) {
+                        results.push({ angle: 'front', descriptor: new Float32Array(data.descriptor) });
+                    }
+                }
+            }
+        } catch { /* ignore */ }
+    }
+
+    return results;
+}
+
+// ============================================================
+// Legacy registerFace — delegates to registerFaceAngle(front)
 // ============================================================
 
 export async function registerFace(
@@ -440,84 +629,15 @@ export async function registerFace(
     video: HTMLVideoElement,
     onProgress?: (step: string, progress: number) => void
 ): Promise<{ success: boolean; error?: string; photo?: string }> {
-    try {
-        const loaded = await loadFaceModels();
-        if (!loaded) return { success: false, error: 'فشل تحميل نماذج التعرف على الوجه' };
-
-        onProgress?.('جاري التقاط الوجه...', 20);
-
-        // Capture multiple frames for better descriptor
-        const descriptors: Float32Array[] = [];
-        for (let i = 0; i < 3; i++) {
-            const frame = await detectFace(video);
-            if (frame) descriptors.push(frame.descriptor);
-            onProgress?.(`إطار ${i + 1}/3`, 30 + i * 20);
-            await new Promise(r => setTimeout(r, 500));
-        }
-
-        if (descriptors.length < 2) {
-            return { success: false, error: 'لم يتم اكتشاف وجه واضح. تأكد من إضاءة جيدة ووجهك أمام الكاميرا مباشرة.' };
-        }
-
-        // Average the descriptors for more stable matching
-        const avgDescriptor = new Float32Array(128);
-        for (const d of descriptors) {
-            for (let j = 0; j < 128; j++) avgDescriptor[j] += d[j];
-        }
-        for (let j = 0; j < 128; j++) avgDescriptor[j] /= descriptors.length;
-
-        onProgress?.('حفظ البيانات...', 85);
-
-        // Capture photo
-        const canvas = document.createElement('canvas');
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        canvas.getContext('2d')!.drawImage(video, 0, 0);
-        const photo = canvas.toDataURL('image/jpeg', 0.6);
-
-        // Store locally
-        localStorage.setItem(FACE_KEY + userId, JSON.stringify({
-            descriptor: Array.from(avgDescriptor),
-            photo,
-            registeredAt: new Date().toISOString(),
-            frameCount: descriptors.length,
-        }));
-
-        // Upload photo to Firebase Storage (optional — fallback to base64)
-        let photoURL = photo; // fallback: use base64 directly
-        try {
-            console.log('💾 Uploading face photo to Storage for user:', userId);
-            photoURL = await uploadPhotoToStorage(userId, 'face', photo);
-            console.log('✅ Face photo uploaded to Storage');
-        } catch (e: any) {
-            console.warn('⚠️ Photo upload failed, using base64 fallback:', e?.message || e);
-        }
-
-        // Save descriptor to Firestore — this MUST succeed
-        try {
-            await setDoc(doc(db, 'users', userId, 'biometrics', 'face'), {
-                descriptor: Array.from(avgDescriptor),
-                photoURL,
-                registeredAt: new Date().toISOString(),
-                frameCount: descriptors.length,
-                locked: true,
-            });
-            console.log('✅ Face data saved to Firestore successfully');
-        } catch (e: any) {
-            console.error('❌ Failed to save face to Firestore:', e?.message || e);
-            return { success: false, error: 'فشل حفظ بيانات الوجه في قاعدة البيانات' };
-        }
-
-        onProgress?.('تم!', 100);
-        return { success: true, photo };
-    } catch (err: any) {
-        console.error('Face register error:', err);
-        return { success: false, error: err.message || 'فشل تسجيل الوجه' };
-    }
+    const result = await registerFaceAngle({ userId, video, angle: 'front', onProgress });
+    return { success: result.success, error: result.error };
 }
 
+
+
+
 // ============================================================
-// Advanced Face Verification with Liveness + Confidence
+// Advanced Face Verification with Liveness + Multi-Angle Matching
 // ============================================================
 
 export async function verifyFaceAdvanced(
@@ -527,51 +647,46 @@ export async function verifyFaceAdvanced(
     livenessTracker?: LivenessTracker
 ): Promise<FaceVerifyResult> {
     try {
-        // Try localStorage first, then Firestore
-        let storedDescriptor: Float32Array | null = null;
-        const storedStr = localStorage.getItem(FACE_KEY + userId);
-        if (storedStr) {
-            const stored = JSON.parse(storedStr);
-            storedDescriptor = new Float32Array(stored.descriptor);
-        } else {
-            // Load from Firestore and cache locally
-            const firestoreData = await loadBiometricFromFirestore(userId, 'face');
-            if (firestoreData?.descriptor) {
-                storedDescriptor = new Float32Array(firestoreData.descriptor);
-                // Cache in localStorage for future use
-                localStorage.setItem(FACE_KEY + userId, JSON.stringify({
-                    descriptor: firestoreData.descriptor,
-                    photo: firestoreData.photoURL || firestoreData.photo || '',
-                    registeredAt: firestoreData.registeredAt,
-                    frameCount: firestoreData.frameCount,
-                }));
-                console.log('✅ Face data loaded from Firestore and cached locally');
-            }
-        }
-        if (!storedDescriptor) return { success: false, error: 'لم يتم تسجيل وجه' };
-
         const loaded = await loadFaceModels();
         if (!loaded) return { success: false, error: 'فشل تحميل النماذج' };
 
-        // Detect current face
+        // Load ALL registered angle descriptors (front, left, right)
+        const storedAngles = await loadAllFaceDescriptors(userId);
+        if (storedAngles.length === 0) {
+            return { success: false, error: 'لم يتم تسجيل وجه. يرجى إعادة التسجيل.' };
+        }
+
+        // Detect current face frame
         const currentFrame = await detectFace(video);
         if (!currentFrame) return { success: false, error: 'لم يتم اكتشاف وجه' };
 
-        // Add to collected frames for liveness
+        // Add to collected frames for liveness analysis
         collectedFrames.push(currentFrame);
 
-        // Update advanced liveness tracker if provided
+        // Update liveness tracker if provided
         if (livenessTracker) updateLivenessTracker(livenessTracker, currentFrame, video);
 
-        // Calculate match distance
-        const distance = faceapi.euclideanDistance(currentFrame.descriptor, storedDescriptor);
-        const confidence = Math.max(0, Math.min(100, Math.round((1 - distance / 1.0) * 100)));
+        // Multi-angle matching via COSINE SIMILARITY (production-grade)
+        // Cosine similarity: 1.0 = identical, 0.0 = unrelated
+        let bestScore = -1;
+        let bestAngle: FaceAngle = 'front';
+        for (const { angle, descriptor } of storedAngles) {
+            const score = cosineSimilarity(currentFrame.descriptor, descriptor);
+            if (score > bestScore) {
+                bestScore = score;
+                bestAngle = angle;
+            }
+        }
 
-        // --- STRICTER thresholds vs old code ---
-        const matchThreshold = 0.50;  // was 0.55 — stricter face match required
-        const minFrames = 6;          // was 4 — need more frames
+        const similarity = bestScore;
+        const confidence = Math.max(0, Math.min(100, Math.round(similarity * 100)));
+        console.log(`🔍 Best match: angle=${bestAngle}, cosine=${similarity.toFixed(4)}, confidence=${confidence}%`);
 
-        if (distance > matchThreshold) {
+        // Cosine similarity threshold (0.55 = very strict, 0.45 = lenient)
+        const matchThreshold = storedAngles.length >= 2 ? 0.50 : 0.48;
+        const minFrames = 6;
+
+        if (similarity < matchThreshold) {
             return { success: false, error: 'الوجه غير مطابق', confidence };
         }
 
@@ -583,7 +698,7 @@ export async function verifyFaceAdvanced(
         if (livenessTracker) {
             const liveness = calculateAdvancedLivenessScore(livenessTracker);
 
-            // Hard-fail on photo: texture score must be reasonable
+            // Hard-fail on photo: texture score too low
             if (liveness.textureScore < 5 && livenessTracker.textureScores.length >= 5) {
                 return {
                     success: false,
@@ -593,7 +708,7 @@ export async function verifyFaceAdvanced(
                 };
             }
 
-            // Require both blink AND head movement, OR very high score
+            // Require blink + head turn (or high overall score)
             if (liveness.score < 55) {
                 return {
                     success: false,
@@ -603,7 +718,7 @@ export async function verifyFaceAdvanced(
                 };
             }
 
-            // Even if score passes — if no blink detected after enough frames, reject
+            // After many frames, blink is mandatory
             if (!liveness.blinkDetected && livenessTracker.frames.length >= 12) {
                 return {
                     success: false,
@@ -615,7 +730,7 @@ export async function verifyFaceAdvanced(
 
             return { success: true, confidence, livenessScore: liveness.score };
         } else {
-            // Fallback to basic liveness if no tracker
+            // Fallback to basic liveness
             const livenessScore = calculateLivenessScore(collectedFrames);
             if (livenessScore < 30) {
                 return {
@@ -632,6 +747,7 @@ export async function verifyFaceAdvanced(
         return { success: false, error: err.message || 'فشل التحقق' };
     }
 }
+
 
 // Simple verify (backward compat)
 export async function verifyFace(
@@ -726,326 +842,33 @@ export function stopCamera(stream: MediaStream | null): void {
 }
 
 // ============================================================
-// Iris / Eye Recognition
-// Uses face-api.js landmarks to extract eye regions and match
-// Landmark indices: Left eye 36-41, Right eye 42-47
+// Cosine Similarity — production-grade matching
+// More robust than Euclidean for face embeddings
 // ============================================================
 
-const IRIS_KEY = 'iris_data_';
-
-function extractEyeRegion(
-    video: HTMLVideoElement,
-    landmarks: faceapi.FaceLandmarks68,
-    eye: 'left' | 'right'
-): ImageData | null {
-    try {
-        const positions = landmarks.positions;
-        // Left eye landmarks: 36-41, Right eye: 42-47
-        const startIdx = eye === 'left' ? 36 : 42;
-        const endIdx = eye === 'left' ? 41 : 47;
-
-        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
-        for (let i = startIdx; i <= endIdx; i++) {
-            const pt = positions[i];
-            if (pt.x < minX) minX = pt.x;
-            if (pt.y < minY) minY = pt.y;
-            if (pt.x > maxX) maxX = pt.x;
-            if (pt.y > maxY) maxY = pt.y;
-        }
-
-        // Expand region by 40% for better capture
-        const padding = Math.max((maxX - minX), (maxY - minY)) * 0.4;
-        minX = Math.max(0, minX - padding);
-        minY = Math.max(0, minY - padding);
-        maxX = Math.min(video.videoWidth, maxX + padding);
-        maxY = Math.min(video.videoHeight, maxY + padding);
-
-        const w = Math.round(maxX - minX);
-        const h = Math.round(maxY - minY);
-        if (w < 10 || h < 10) return null;
-
-        const canvas = document.createElement('canvas');
-        canvas.width = w;
-        canvas.height = h;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return null;
-
-        ctx.drawImage(video, Math.round(minX), Math.round(minY), w, h, 0, 0, w, h);
-        return ctx.getImageData(0, 0, w, h);
-    } catch {
-        return null;
+export function cosineSimilarity(a: Float32Array, b: Float32Array): number {
+    let dot = 0, normA = 0, normB = 0;
+    const len = Math.min(a.length, b.length);
+    for (let i = 0; i < len; i++) {
+        dot += a[i] * b[i];
+        normA += a[i] * a[i];
+        normB += b[i] * b[i];
     }
-}
-
-function computeEyeSignature(imageData: ImageData): Float32Array {
-    // Compute a compact signature from eye region pixels
-    // Divide into 8x8 grid cells, compute average intensity per cell
-    const { width, height, data } = imageData;
-    const gridSize = 8;
-    const signature = new Float32Array(gridSize * gridSize);
-
-    const cellW = width / gridSize;
-    const cellH = height / gridSize;
-
-    for (let gy = 0; gy < gridSize; gy++) {
-        for (let gx = 0; gx < gridSize; gx++) {
-            let sum = 0;
-            let count = 0;
-            const startX = Math.floor(gx * cellW);
-            const endX = Math.floor((gx + 1) * cellW);
-            const startY = Math.floor(gy * cellH);
-            const endY = Math.floor((gy + 1) * cellH);
-
-            for (let y = startY; y < endY; y++) {
-                for (let x = startX; x < endX; x++) {
-                    const idx = (y * width + x) * 4;
-                    // Grayscale intensity
-                    sum += data[idx] * 0.299 + data[idx + 1] * 0.587 + data[idx + 2] * 0.114;
-                    count++;
-                }
-            }
-            signature[gy * gridSize + gx] = count > 0 ? sum / count / 255 : 0;
-        }
-    }
-    return signature;
-}
-
-function compareEyeSignatures(a: Float32Array, b: Float32Array): number {
-    let sumSq = 0;
-    for (let i = 0; i < a.length; i++) {
-        const diff = a[i] - b[i];
-        sumSq += diff * diff;
-    }
-    return Math.sqrt(sumSq / a.length);
-}
-
-export async function registerIris(
-    userId: string,
-    video: HTMLVideoElement,
-    onProgress?: (step: string, progress: number) => void
-): Promise<{ success: boolean; error?: string; photo?: string }> {
-    try {
-        const loaded = await loadFaceModels();
-        if (!loaded) return { success: false, error: 'فشل تحميل النماذج' };
-
-        onProgress?.('جاري مسح قزحية العين...', 10);
-
-        const allLeftSigs: Float32Array[] = [];
-        const allRightSigs: Float32Array[] = [];
-        const allDescriptors: Float32Array[] = [];
-
-        for (let i = 0; i < 5; i++) {
-            onProgress?.(`إطار ${i + 1}/5`, 15 + i * 15);
-            const frame = await detectFace(video);
-            if (!frame) continue;
-
-            allDescriptors.push(frame.descriptor);
-
-            const leftEye = extractEyeRegion(video, frame.landmarks, 'left');
-            const rightEye = extractEyeRegion(video, frame.landmarks, 'right');
-
-            if (leftEye) allLeftSigs.push(computeEyeSignature(leftEye));
-            if (rightEye) allRightSigs.push(computeEyeSignature(rightEye));
-
-            await new Promise(r => setTimeout(r, 400));
-        }
-
-        if (allLeftSigs.length < 3 || allRightSigs.length < 3) {
-            return { success: false, error: 'لم يتم اكتشاف العينين بوضوح. تأكد من إضاءة جيدة.' };
-        }
-
-        onProgress?.('معالجة بصمة القزحية...', 80);
-
-        // Average the signatures
-        const avgLeft = new Float32Array(64);
-        const avgRight = new Float32Array(64);
-        for (const s of allLeftSigs) { for (let j = 0; j < 64; j++) avgLeft[j] += s[j]; }
-        for (const s of allRightSigs) { for (let j = 0; j < 64; j++) avgRight[j] += s[j]; }
-        for (let j = 0; j < 64; j++) avgLeft[j] /= allLeftSigs.length;
-        for (let j = 0; j < 64; j++) avgRight[j] /= allRightSigs.length;
-
-        // Average face descriptor too for combined matching
-        const avgDesc = new Float32Array(128);
-        for (const d of allDescriptors) { for (let j = 0; j < 128; j++) avgDesc[j] += d[j]; }
-        for (let j = 0; j < 128; j++) avgDesc[j] /= allDescriptors.length;
-
-        // Capture photo
-        const canvas = document.createElement('canvas');
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        canvas.getContext('2d')!.drawImage(video, 0, 0);
-        const photo = canvas.toDataURL('image/jpeg', 0.6);
-
-        onProgress?.('حفظ بيانات القزحية...', 90);
-
-        // Store locally
-        localStorage.setItem(IRIS_KEY + userId, JSON.stringify({
-            leftEye: Array.from(avgLeft),
-            rightEye: Array.from(avgRight),
-            faceDescriptor: Array.from(avgDesc),
-            photo,
-            registeredAt: new Date().toISOString(),
-            frameCount: allLeftSigs.length,
-        }));
-
-        // Upload photo to Firebase Storage (optional — fallback to base64)
-        let photoURL = photo;
-        try {
-            console.log('💾 Uploading iris photo to Storage for user:', userId);
-            photoURL = await uploadPhotoToStorage(userId, 'iris', photo);
-            console.log('✅ Iris photo uploaded to Storage');
-        } catch (e: any) {
-            console.warn('⚠️ Iris photo upload failed, using base64 fallback:', e?.message || e);
-        }
-
-        // Save data to Firestore — this MUST succeed
-        try {
-            await setDoc(doc(db, 'users', userId, 'biometrics', 'iris'), {
-                leftEye: Array.from(avgLeft),
-                rightEye: Array.from(avgRight),
-                faceDescriptor: Array.from(avgDesc),
-                photoURL,
-                registeredAt: new Date().toISOString(),
-                frameCount: allLeftSigs.length,
-                locked: true,
-            });
-            console.log('✅ Iris data saved to Firestore successfully');
-        } catch (e: any) {
-            console.error('❌ Failed to save iris to Firestore:', e?.message || e);
-            return { success: false, error: 'فشل حفظ بيانات القزحية في قاعدة البيانات' };
-        }
-
-        onProgress?.('تم التسجيل!', 100);
-        return { success: true, photo };
-    } catch (err: any) {
-        console.error('Iris register error:', err);
-        return { success: false, error: err.message || 'فشل تسجيل القزحية' };
-    }
-}
-
-export async function verifyIris(
-    userId: string,
-    video: HTMLVideoElement
-): Promise<{ success: boolean; error?: string; confidence?: number }> {
-    try {
-        // Try localStorage first, then Firestore
-        let storedLeft: Float32Array | null = null;
-        let storedRight: Float32Array | null = null;
-        let storedDesc: Float32Array | null = null;
-
-        const storedStr = localStorage.getItem(IRIS_KEY + userId);
-        if (storedStr) {
-            const stored = JSON.parse(storedStr);
-            storedLeft = new Float32Array(stored.leftEye);
-            storedRight = new Float32Array(stored.rightEye);
-            storedDesc = new Float32Array(stored.faceDescriptor);
-        } else {
-            // Load from Firestore and cache
-            const fsData = await loadBiometricFromFirestore(userId, 'iris');
-            if (fsData?.leftEye && fsData?.rightEye && fsData?.faceDescriptor) {
-                storedLeft = new Float32Array(fsData.leftEye);
-                storedRight = new Float32Array(fsData.rightEye);
-                storedDesc = new Float32Array(fsData.faceDescriptor);
-                localStorage.setItem(IRIS_KEY + userId, JSON.stringify({
-                    leftEye: fsData.leftEye,
-                    rightEye: fsData.rightEye,
-                    faceDescriptor: fsData.faceDescriptor,
-                    photo: fsData.photoURL || '',
-                    registeredAt: fsData.registeredAt,
-                    frameCount: fsData.frameCount,
-                }));
-                console.log('✅ Iris data loaded from Firestore and cached locally');
-            }
-        }
-
-        if (!storedLeft || !storedRight || !storedDesc) {
-            return { success: false, error: 'لم يتم تسجيل قزحية العين' };
-        }
-
-        const loaded = await loadFaceModels();
-        if (!loaded) return { success: false, error: 'فشل تحميل النماذج' };
-
-        const frame = await detectFace(video);
-        if (!frame) return { success: false, error: 'لم يتم اكتشاف وجه' };
-
-        // Face descriptor match (40% weight)
-        const faceDistance = faceapi.euclideanDistance(frame.descriptor, storedDesc);
-        const faceScore = Math.max(0, 1 - faceDistance / 0.8);
-
-        // Eye signature match (60% weight)
-        const leftEye = extractEyeRegion(video, frame.landmarks, 'left');
-        const rightEye = extractEyeRegion(video, frame.landmarks, 'right');
-
-        if (!leftEye || !rightEye) {
-            return { success: false, error: 'لم يتم اكتشاف العينين' };
-        }
-
-        const leftSig = computeEyeSignature(leftEye);
-        const rightSig = computeEyeSignature(rightEye);
-
-        const leftDist = compareEyeSignatures(leftSig, storedLeft);
-        const rightDist = compareEyeSignatures(rightSig, storedRight);
-        const eyeAvgDist = (leftDist + rightDist) / 2;
-        const eyeScore = Math.max(0, 1 - eyeAvgDist / 0.3);
-
-        // Combined score
-        const combinedScore = faceScore * 0.4 + eyeScore * 0.6;
-        const confidence = Math.round(combinedScore * 100);
-
-        if (combinedScore >= 0.55) {
-            return { success: true, confidence };
-        }
-        return { success: false, error: 'القزحية غير مطابقة', confidence };
-    } catch (err: any) {
-        console.error('Iris verify error:', err);
-        return { success: false, error: err.message || 'فشل التحقق من القزحية' };
-    }
-}
-
-export function isIrisRegistered(userId: string): boolean {
-    return !!localStorage.getItem(IRIS_KEY + userId);
-}
-
-export async function isIrisRegisteredAsync(userId: string): Promise<boolean> {
-    if (localStorage.getItem(IRIS_KEY + userId)) return true;
-    const fsData = await loadBiometricFromFirestore(userId, 'iris');
-    if (fsData?.leftEye) {
-        localStorage.setItem(IRIS_KEY + userId, JSON.stringify({
-            leftEye: fsData.leftEye,
-            rightEye: fsData.rightEye,
-            faceDescriptor: fsData.faceDescriptor,
-            photo: fsData.photoURL || '',
-            registeredAt: fsData.registeredAt,
-            frameCount: fsData.frameCount,
-        }));
-        return true;
-    }
-    return false;
-}
-
-export function getIrisPhoto(userId: string): string | null {
-    try {
-        const stored = localStorage.getItem(IRIS_KEY + userId);
-        if (!stored) return null;
-        return JSON.parse(stored).photo;
-    } catch { return null; }
-}
-
-export function removeIrisData(userId: string): void {
-    localStorage.removeItem(IRIS_KEY + userId);
+    const denom = Math.sqrt(normA) * Math.sqrt(normB);
+    return denom === 0 ? 0 : dot / denom;
 }
 
 // ============================================================
-// Firestore Biometric Helpers
+// Firestore Biometric Helpers (face-only)
 // ============================================================
 
 export async function isBiometricRegisteredInFirestore(
     userId: string,
-    type: 'face' | 'iris'
+    type: 'face' | 'face_front' | 'face_left' | 'face_right'
 ): Promise<boolean> {
     try {
         const snap = await getDoc(doc(db, 'users', userId, 'biometrics', type));
-        return snap.exists() && snap.data()?.locked === true;
+        return snap.exists();
     } catch {
         return false;
     }
@@ -1053,7 +876,7 @@ export async function isBiometricRegisteredInFirestore(
 
 export async function loadBiometricFromFirestore(
     userId: string,
-    type: 'face' | 'iris'
+    type: string
 ): Promise<Record<string, any> | null> {
     try {
         const snap = await getDoc(doc(db, 'users', userId, 'biometrics', type));
@@ -1064,56 +887,49 @@ export async function loadBiometricFromFirestore(
     return null;
 }
 
-export async function checkBothBiometricsRegistered(userId: string): Promise<boolean> {
-    const [face, iris] = await Promise.all([
-        isBiometricRegisteredInFirestore(userId, 'face'),
-        isBiometricRegisteredInFirestore(userId, 'iris'),
-    ]);
-    return face && iris;
+export async function checkFaceBiometricRegistered(userId: string): Promise<boolean> {
+    // At minimum, front angle must be registered
+    return isBiometricRegisteredInFirestore(userId, 'face_front');
 }
 
 /**
- * Call on app start / login to preload biometric data from Firestore into localStorage.
- * This ensures isFaceRegistered() / isIrisRegistered() work synchronously on any device.
+ * Preload face embeddings from Firestore into localStorage on app start.
+ * This ensures isFaceRegistered() works synchronously on any device.
  */
 export async function ensureBiometricDataLoaded(userId: string): Promise<void> {
     try {
-        const [faceLocal, irisLocal] = [
-            localStorage.getItem(FACE_KEY + userId),
-            localStorage.getItem(IRIS_KEY + userId),
-        ];
-
+        const angles: FaceAngle[] = ['front', 'left', 'right'];
         const promises: Promise<void>[] = [];
 
-        if (!faceLocal) {
+        for (const angle of angles) {
+            const cacheKey = `${FACE_KEY}${userId}_${angle}`;
+            if (!localStorage.getItem(cacheKey)) {
+                promises.push(
+                    loadBiometricFromFirestore(userId, `face_${angle}`).then(fsData => {
+                        if (fsData?.descriptor && Array.isArray(fsData.descriptor) && fsData.descriptor.length === 128) {
+                            localStorage.setItem(cacheKey, JSON.stringify({
+                                descriptor: fsData.descriptor,
+                                angle,
+                                registeredAt: fsData.registeredAt,
+                            }));
+                            console.log(`✅ Face ${angle} synced from Firestore to localStorage`);
+                        }
+                    })
+                );
+            }
+        }
+
+        // Also check legacy face key
+        if (!localStorage.getItem(FACE_KEY + userId)) {
             promises.push(
                 loadBiometricFromFirestore(userId, 'face').then(fsData => {
                     if (fsData?.descriptor) {
                         localStorage.setItem(FACE_KEY + userId, JSON.stringify({
                             descriptor: fsData.descriptor,
-                            photo: fsData.photoURL || fsData.photo || '',
                             registeredAt: fsData.registeredAt,
                             frameCount: fsData.frameCount,
                         }));
                         console.log('✅ Face data synced from Firestore to localStorage');
-                    }
-                })
-            );
-        }
-
-        if (!irisLocal) {
-            promises.push(
-                loadBiometricFromFirestore(userId, 'iris').then(fsData => {
-                    if (fsData?.leftEye) {
-                        localStorage.setItem(IRIS_KEY + userId, JSON.stringify({
-                            leftEye: fsData.leftEye,
-                            rightEye: fsData.rightEye,
-                            faceDescriptor: fsData.faceDescriptor,
-                            photo: fsData.photoURL || fsData.photo || '',
-                            registeredAt: fsData.registeredAt,
-                            frameCount: fsData.frameCount,
-                        }));
-                        console.log('✅ Iris data synced from Firestore to localStorage');
                     }
                 })
             );

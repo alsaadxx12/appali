@@ -1,51 +1,115 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Camera, CheckCircle, Loader2, Eye, User, Shield, Fingerprint, ScanFace, Sparkles } from 'lucide-react';
+import { Camera, CheckCircle, Shield, ScanFace, Sparkles, ArrowRight, RotateCcw } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import {
     loadFaceModels,
     startCamera,
     stopCamera,
-    registerFace,
-    registerIris,
-    isBiometricRegisteredInFirestore,
+    registerFaceAngle,
+    isFaceAngleRegistered,
+    FaceAngle,
 } from '../utils/faceAuth';
 
 interface Props {
     onComplete: () => void;
 }
 
+interface AngleStep {
+    angle: FaceAngle;
+    label: string;
+    instruction: string;
+    hint: string;
+    icon: string;
+    gradient: string;
+    glow: string;
+}
+
+const ANGLE_STEPS: AngleStep[] = [
+    {
+        angle: 'front',
+        label: 'أمام',
+        instruction: 'انظر مباشرة إلى الكاميرا',
+        hint: 'وجّه وجهك للأمام، ابتسم قليلاً في إضاءة جيدة',
+        icon: '😐',
+        gradient: 'linear-gradient(135deg, #3b82f6, #6366f1)',
+        glow: 'rgba(59,130,246,0.35)',
+    },
+    {
+        angle: 'right',
+        label: 'يمين',
+        instruction: 'أدِر وجهك قليلاً نحو اليمين',
+        hint: 'أمِل رأسك ببطء ناحية اليمين (15-30 درجة)',
+        icon: '👉',
+        gradient: 'linear-gradient(135deg, #f59e0b, #f97316)',
+        glow: 'rgba(245,158,11,0.35)',
+    },
+    {
+        angle: 'left',
+        label: 'يسار',
+        instruction: 'أدِر وجهك قليلاً نحو اليسار',
+        hint: 'أمِل رأسك ببطء ناحية اليسار (15-30 درجة)',
+        icon: '👈',
+        gradient: 'linear-gradient(135deg, #10b981, #059669)',
+        glow: 'rgba(16,185,129,0.35)',
+    },
+];
+
 export default function BiometricRegistrationPage({ onComplete }: Props) {
     const { user } = useAuth();
     const userId = user?.id || '';
 
-    const [step, setStep] = useState<'intro' | 'face' | 'iris' | 'done'>('intro');
-    const [faceRegistered, setFaceRegistered] = useState(false);
-    const [irisRegistered, setIrisRegistered] = useState(false);
+    // Main step state: intro / face_capture / done
+    const [mainStep, setMainStep] = useState<'intro' | 'face_capture' | 'done'>('intro');
+
+    // Per-angle registration state
+    const [currentAngleIdx, setCurrentAngleIdx] = useState(0);
+    const [completedAngles, setCompletedAngles] = useState<Set<FaceAngle>>(new Set());
+
+    // Camera/loading state
     const [loading, setLoading] = useState(false);
-    const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
-    const [progress, setProgress] = useState(0);
-    const [progressText, setProgressText] = useState('');
     const [cameraReady, setCameraReady] = useState(false);
+    const [progressText, setProgressText] = useState('');
+    const [progress, setProgress] = useState(0);
+    const [message, setMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
+    const [countdown, setCountdown] = useState(0);
+
     const videoRef = useRef<HTMLVideoElement>(null);
     const streamRef = useRef<MediaStream | null>(null);
+    const countdownRef = useRef<any>(null);
 
+    // On mount — check which angles are already done
     useEffect(() => {
         const check = async () => {
             if (!userId) return;
-            const [face, iris] = await Promise.all([
-                isBiometricRegisteredInFirestore(userId, 'face'),
-                isBiometricRegisteredInFirestore(userId, 'iris'),
+            const [front, right, left] = await Promise.all([
+                isFaceAngleRegistered(userId, 'front'),
+                isFaceAngleRegistered(userId, 'right'),
+                isFaceAngleRegistered(userId, 'left'),
             ]);
-            setFaceRegistered(face);
-            setIrisRegistered(iris);
-            if (face && iris) setStep('done');
-            else if (face) setStep('iris');
+            const done = new Set<FaceAngle>();
+            if (front) done.add('front');
+            if (right) done.add('right');
+            if (left) done.add('left');
+            setCompletedAngles(done);
+
+            // Determine starting state
+            if (done.size >= 3) {
+                setMainStep('done');
+            } else {
+                // Find first incomplete angle
+                const firstIncomplete = ANGLE_STEPS.findIndex(s => !done.has(s.angle));
+                if (firstIncomplete >= 0) setCurrentAngleIdx(firstIncomplete);
+            }
         };
         check();
     }, [userId]);
 
+    // Cleanup camera on unmount
     useEffect(() => {
-        return () => { stopCamera(streamRef.current); };
+        return () => {
+            stopCamera(streamRef.current);
+            if (countdownRef.current) clearInterval(countdownRef.current);
+        };
     }, []);
 
     const openCamera = async () => {
@@ -53,591 +117,370 @@ export default function BiometricRegistrationPage({ onComplete }: Props) {
         setMessage(null);
         const loaded = await loadFaceModels();
         if (!loaded) {
-            setMessage({ type: 'error', text: 'فشل تحميل نماذج التعرف. تأكد من الاتصال بالإنترنت.' });
+            setMessage({ type: 'error', text: 'فشل تحميل نماذج التعرف. تحقق من الاتصال.' });
             return;
         }
         const stream = await startCamera(videoRef.current!);
         if (stream) {
             streamRef.current = stream;
             setCameraReady(true);
+            setMessage({ type: 'info', text: ANGLE_STEPS[currentAngleIdx].hint });
         } else {
-            setMessage({ type: 'error', text: 'فشل الوصول للكاميرا. تأكد من صلاحيات الكاميرا.' });
+            setMessage({ type: 'error', text: 'فشل الوصول للكاميرا. تأكد من الصلاحيات.' });
         }
     };
 
-    const handleCaptureFace = async () => {
-        if (!videoRef.current || !userId) return;
-        setLoading(true);
-        setMessage(null);
-        setProgress(0);
-        const result = await registerFace(userId, videoRef.current, (text, p) => {
-            setProgressText(text);
-            setProgress(p);
-        });
-        setLoading(false);
-        if (result.success) {
-            setFaceRegistered(true);
-            stopCamera(streamRef.current);
-            streamRef.current = null;
-            setCameraReady(false);
-            setMessage({ type: 'success', text: 'تم تسجيل الوجه بنجاح!' });
-            setTimeout(() => { setMessage(null); setStep('iris'); }, 1500);
-        } else {
-            setMessage({ type: 'error', text: result.error || 'فشل تسجيل الوجه' });
-        }
+    // Countdown before capturing (3 seconds)
+    const startCaptureCountdown = () => {
+        setCountdown(3);
+        countdownRef.current = setInterval(() => {
+            setCountdown(prev => {
+                if (prev <= 1) {
+                    clearInterval(countdownRef.current);
+                    captureCurrentAngle();
+                    return 0;
+                }
+                return prev - 1;
+            });
+        }, 1000);
     };
 
-    const handleCaptureIris = async () => {
+    const captureCurrentAngle = async () => {
         if (!videoRef.current || !userId) return;
+        const angleStep = ANGLE_STEPS[currentAngleIdx];
         setLoading(true);
         setMessage(null);
         setProgress(0);
-        const result = await registerIris(userId, videoRef.current, (text, p) => {
-            setProgressText(text);
-            setProgress(p);
+
+        const result = await registerFaceAngle({
+            userId,
+            video: videoRef.current,
+            angle: angleStep.angle,
+            onProgress: (text, p) => {
+                setProgressText(text);
+                setProgress(p);
+            },
         });
+
         setLoading(false);
         if (result.success) {
-            setIrisRegistered(true);
-            stopCamera(streamRef.current);
-            streamRef.current = null;
-            setCameraReady(false);
-            setMessage({ type: 'success', text: 'تم تسجيل قزحية العين بنجاح!' });
-            setTimeout(() => { setStep('done'); }, 1500);
+            const newCompleted = new Set(completedAngles);
+            newCompleted.add(angleStep.angle);
+            setCompletedAngles(newCompleted);
+            setMessage({ type: 'success', text: `✅ تم التقاط زاوية ${angleStep.label} بنجاح!` });
+
+            // Check if all 3 angles done
+            if (newCompleted.size >= 3) {
+                stopCamera(streamRef.current);
+                streamRef.current = null;
+                setCameraReady(false);
+                setTimeout(() => {
+                    setMessage(null);
+                    setMainStep('done');
+                }, 1500);
+            } else {
+                // Move to next angle
+                setTimeout(() => {
+                    setMessage(null);
+                    const nextIdx = ANGLE_STEPS.findIndex(s => !newCompleted.has(s.angle));
+                    if (nextIdx >= 0) setCurrentAngleIdx(nextIdx);
+                }, 1500);
+            }
         } else {
-            setMessage({ type: 'error', text: result.error || 'فشل تسجيل القزحية' });
+            setMessage({ type: 'error', text: result.error || 'فشل التقاط الزاوية' });
         }
     };
 
     const handleDone = async () => {
-        // Double-check Firestore has both biometric docs before proceeding
-        const [faceOk, irisOk] = await Promise.all([
-            isBiometricRegisteredInFirestore(userId, 'face'),
-            isBiometricRegisteredInFirestore(userId, 'iris'),
-        ]);
-        if (!faceOk || !irisOk) {
-            setMessage({ type: 'error', text: 'تعذر التحقق من البيانات في قاعدة البيانات، حاول مرة أخرى' });
-            if (!faceOk) { setFaceRegistered(false); setStep('face'); }
-            else if (!irisOk) { setIrisRegistered(false); setStep('iris'); }
+        const faceOk = await isFaceAngleRegistered(userId, 'front');
+        if (!faceOk) {
+            setMessage({ type: 'error', text: 'تعذر التحقق من البيانات، حاول مرة أخرى' });
+            setMainStep('face_capture');
             return;
         }
         onComplete();
     };
 
+    // ============================================================
+    // STYLES
+    // ============================================================
+
     const pageStyle: React.CSSProperties = {
         minHeight: '100vh',
-        minWidth: '100vw',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        padding: '20px',
-        background: 'linear-gradient(160deg, #0a0e1a 0%, #111827 40%, #0f172a 100%)',
-        fontFamily: 'var(--font-arabic)',
-        position: 'relative',
-        overflow: 'hidden',
+        background: 'linear-gradient(180deg, #0a0e1a 0%, #0f1629 60%, #111827 100%)',
+        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+        padding: '24px 16px', fontFamily: 'var(--font-arabic)', direction: 'rtl',
+        position: 'relative', overflow: 'hidden',
     };
 
     const cardStyle: React.CSSProperties = {
-        maxWidth: 420,
-        width: '100%',
-        background: 'rgba(15, 23, 42, 0.85)',
-        backdropFilter: 'blur(40px)',
-        WebkitBackdropFilter: 'blur(40px)',
-        borderRadius: 24,
-        border: '1px solid rgba(255,255,255,0.08)',
-        padding: '32px 24px',
-        position: 'relative',
-        zIndex: 2,
-        boxShadow: '0 25px 80px rgba(0,0,0,0.5), inset 0 1px 0 rgba(255,255,255,0.05)',
+        width: '100%', maxWidth: 400, background: 'rgba(255,255,255,0.03)', backdropFilter: 'blur(28px)',
+        borderRadius: 24, padding: '26px 20px', border: '1px solid rgba(255,255,255,0.06)',
+        boxShadow: '0 24px 64px rgba(0,0,0,0.5)', position: 'relative', zIndex: 1,
     };
 
-    // === INTRO ===
-    if (step === 'intro') {
+    const msgBg = message?.type === 'success' ? 'rgba(16,185,129,0.08)' : message?.type === 'error' ? 'rgba(244,63,94,0.08)' : 'rgba(59,130,246,0.08)';
+    const msgBorder = message?.type === 'success' ? 'rgba(16,185,129,0.2)' : message?.type === 'error' ? 'rgba(244,63,94,0.2)' : 'rgba(59,130,246,0.2)';
+    const msgColor = message?.type === 'success' ? '#34d399' : message?.type === 'error' ? '#fb7185' : '#93c5fd';
+
+    // ============================================================
+    // DONE step
+    // ============================================================
+    if (mainStep === 'done') {
         return (
             <div style={pageStyle}>
-                {/* Animated background orbs */}
-                <div style={{
-                    position: 'absolute', width: 300, height: 300, borderRadius: '50%',
-                    background: 'radial-gradient(circle, rgba(59,130,246,0.15), transparent 70%)',
-                    top: '-10%', right: '-10%', animation: 'float 8s ease-in-out infinite',
-                }} />
-                <div style={{
-                    position: 'absolute', width: 250, height: 250, borderRadius: '50%',
-                    background: 'radial-gradient(circle, rgba(139,92,246,0.12), transparent 70%)',
-                    bottom: '-5%', left: '-8%', animation: 'float 10s ease-in-out infinite reverse',
-                }} />
-
-                <div style={cardStyle}>
-                    {/* Icon */}
-                    <div style={{
-                        width: 88, height: 88, borderRadius: '50%',
-                        background: 'linear-gradient(135deg, #3b82f6 0%, #8b5cf6 50%, #a855f7 100%)',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        margin: '0 auto 24px',
-                        boxShadow: '0 12px 40px rgba(99,102,241,0.4)',
-                        animation: 'pulse-glow 3s ease-in-out infinite',
-                    }}>
-                        <Shield size={40} color="white" strokeWidth={1.8} />
+                <div style={{ position: 'absolute', width: 250, height: 250, borderRadius: '50%', background: 'radial-gradient(circle, rgba(16,185,129,0.12), transparent 70%)', top: '10%', left: '-5%' }} />
+                <div style={{ ...cardStyle, padding: '36px 24px', textAlign: 'center' }}>
+                    <div style={{ width: 72, height: 72, borderRadius: '50%', background: 'linear-gradient(135deg, #10b981, #059669)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 18px', boxShadow: '0 12px 40px rgba(16,185,129,0.4)' }}>
+                        <CheckCircle size={34} color="white" strokeWidth={2} />
                     </div>
-
-                    <h1 style={{
-                        fontSize: 22, fontWeight: 900, textAlign: 'center',
-                        marginBottom: 8, color: '#f8fafc',
-                        letterSpacing: '-0.3px',
-                    }}>
-                        المصادقة البيومترية
-                    </h1>
-                    <p style={{
-                        fontSize: 13, color: 'rgba(248,250,252,0.55)',
-                        textAlign: 'center', lineHeight: 2, marginBottom: 28,
-                    }}>
-                        لتأمين حسابك، يجب تسجيل
-                        <strong style={{ color: '#60a5fa' }}> بصمة الوجه </strong>
-                        و
-                        <strong style={{ color: '#a78bfa' }}> قزحية العين </strong>
-                        <br />
-                        <span style={{ fontSize: 11, color: 'rgba(248,250,252,0.35)' }}>
-                            البيانات البيومترية مشفّرة ولا يمكن تغييرها لاحقاً
-                        </span>
+                    <h2 style={{ fontSize: 20, fontWeight: 900, color: '#f8fafc', marginBottom: 8 }}>تم التسجيل بنجاح! 🎉</h2>
+                    <p style={{ fontSize: 13, color: 'rgba(248,250,252,0.5)', lineHeight: 1.9, marginBottom: 24 }}>
+                        تم تسجيل بصمة وجهك من <strong style={{ color: '#34d399' }}>3 زوايا</strong> مختلفة<br />
+                        يتم حفظ بيانات التعرف كـ <strong style={{ color: '#60a5fa' }}>embeddings مشفّرة فقط</strong> — بدون صور<br />
+                        <span style={{ fontSize: 11, color: 'rgba(248,250,252,0.3)' }}>لا يمكن استرجاع وجهك من البيانات المخزنة</span>
                     </p>
 
-                    {/* Status cards */}
-                    <div style={{ display: 'flex', gap: 10, marginBottom: 28 }}>
-                        <div style={{
-                            flex: 1, padding: '18px 12px', textAlign: 'center',
-                            borderRadius: 16,
-                            background: faceRegistered
-                                ? 'linear-gradient(135deg, rgba(16,185,129,0.12), rgba(16,185,129,0.05))'
-                                : 'rgba(255,255,255,0.03)',
-                            border: `1px solid ${faceRegistered ? 'rgba(16,185,129,0.3)' : 'rgba(255,255,255,0.06)'}`,
-                            transition: 'all 0.3s ease',
-                        }}>
-                            <div style={{
-                                width: 44, height: 44, borderRadius: '50%',
-                                background: faceRegistered
-                                    ? 'linear-gradient(135deg, #10b981, #059669)'
-                                    : 'linear-gradient(135deg, #3b82f6, #6366f1)',
-                                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                margin: '0 auto 10px',
-                                boxShadow: faceRegistered ? '0 4px 20px rgba(16,185,129,0.3)' : '0 4px 20px rgba(59,130,246,0.2)',
+                    {/* Steps summary */}
+                    <div style={{ display: 'flex', gap: 8, marginBottom: 24 }}>
+                        {ANGLE_STEPS.map(s => (
+                            <div key={s.angle} style={{
+                                flex: 1, padding: '12px 8px', textAlign: 'center', borderRadius: 14,
+                                background: 'rgba(16,185,129,0.08)',
+                                border: '1px solid rgba(16,185,129,0.25)',
                             }}>
-                                <ScanFace size={20} color="white" strokeWidth={1.8} />
+                                <div style={{ fontSize: 20, marginBottom: 4 }}>✅</div>
+                                <div style={{ fontSize: 11, fontWeight: 700, color: '#34d399' }}>{s.label}</div>
                             </div>
-                            <div style={{ fontSize: 13, fontWeight: 700, color: '#f1f5f9' }}>بصمة الوجه</div>
-                            <div style={{
-                                fontSize: 10, marginTop: 6, fontWeight: 600,
-                                color: faceRegistered ? '#34d399' : 'rgba(248,250,252,0.35)',
-                            }}>
-                                {faceRegistered ? '✓ مكتمل' : 'مطلوب'}
-                            </div>
-                        </div>
-
-                        <div style={{
-                            flex: 1, padding: '18px 12px', textAlign: 'center',
-                            borderRadius: 16,
-                            background: irisRegistered
-                                ? 'linear-gradient(135deg, rgba(16,185,129,0.12), rgba(16,185,129,0.05))'
-                                : 'rgba(255,255,255,0.03)',
-                            border: `1px solid ${irisRegistered ? 'rgba(16,185,129,0.3)' : 'rgba(255,255,255,0.06)'}`,
-                            transition: 'all 0.3s ease',
-                        }}>
-                            <div style={{
-                                width: 44, height: 44, borderRadius: '50%',
-                                background: irisRegistered
-                                    ? 'linear-gradient(135deg, #10b981, #059669)'
-                                    : 'linear-gradient(135deg, #8b5cf6, #a855f7)',
-                                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                margin: '0 auto 10px',
-                                boxShadow: irisRegistered ? '0 4px 20px rgba(16,185,129,0.3)' : '0 4px 20px rgba(139,92,246,0.2)',
-                            }}>
-                                <Eye size={20} color="white" strokeWidth={1.8} />
-                            </div>
-                            <div style={{ fontSize: 13, fontWeight: 700, color: '#f1f5f9' }}>قزحية العين</div>
-                            <div style={{
-                                fontSize: 10, marginTop: 6, fontWeight: 600,
-                                color: irisRegistered ? '#34d399' : 'rgba(248,250,252,0.35)',
-                            }}>
-                                {irisRegistered ? '✓ مكتمل' : 'مطلوب'}
-                            </div>
-                        </div>
+                        ))}
                     </div>
 
-                    <button
-                        onClick={() => setStep(faceRegistered ? 'iris' : 'face')}
-                        style={{
-                            width: '100%', padding: '16px',
-                            borderRadius: 14,
-                            background: 'linear-gradient(135deg, #3b82f6, #6366f1, #8b5cf6)',
-                            border: 'none', color: 'white',
-                            fontSize: 15, fontWeight: 800,
-                            cursor: 'pointer',
-                            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
-                            fontFamily: 'var(--font-arabic)',
-                            boxShadow: '0 8px 30px rgba(99,102,241,0.35)',
-                            transition: 'all 0.3s ease',
-                        }}
-                    >
-                        <Fingerprint size={20} strokeWidth={2} />
-                        {faceRegistered ? 'تسجيل قزحية العين' : 'بدء المصادقة'}
-                    </button>
-                </div>
-
-                <style>{`
-                    @keyframes float {
-                        0%, 100% { transform: translateY(0) scale(1); }
-                        50% { transform: translateY(-20px) scale(1.05); }
-                    }
-                    @keyframes pulse-glow {
-                        0%, 100% { box-shadow: 0 12px 40px rgba(99,102,241,0.3); }
-                        50% { box-shadow: 0 12px 60px rgba(99,102,241,0.5); }
-                    }
-                `}</style>
-            </div>
-        );
-    }
-
-    // === DONE ===
-    if (step === 'done') {
-        return (
-            <div style={pageStyle}>
-                <div style={{
-                    position: 'absolute', width: 350, height: 350, borderRadius: '50%',
-                    background: 'radial-gradient(circle, rgba(16,185,129,0.12), transparent 70%)',
-                    top: '20%', left: '50%', transform: 'translateX(-50%)',
-                    animation: 'float 6s ease-in-out infinite',
-                }} />
-
-                <div style={cardStyle}>
-                    <div style={{
-                        width: 96, height: 96, borderRadius: '50%',
+                    <button onClick={handleDone} style={{
+                        width: '100%', padding: '16px', borderRadius: 14,
                         background: 'linear-gradient(135deg, #10b981, #059669)',
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        margin: '0 auto 24px',
-                        boxShadow: '0 12px 50px rgba(16,185,129,0.4)',
-                        animation: 'pulse-glow-green 3s ease-in-out infinite',
+                        border: 'none', color: 'white', fontSize: 15, fontWeight: 800,
+                        cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
+                        fontFamily: 'var(--font-arabic)', boxShadow: '0 8px 30px rgba(16,185,129,0.35)',
                     }}>
-                        <CheckCircle size={44} color="white" strokeWidth={1.8} />
-                    </div>
-
-                    <h1 style={{
-                        fontSize: 22, fontWeight: 900, textAlign: 'center',
-                        marginBottom: 8, color: '#f8fafc',
-                    }}>
-                        اكتملت المصادقة
-                    </h1>
-                    <p style={{
-                        fontSize: 13, color: 'rgba(248,250,252,0.55)',
-                        textAlign: 'center', lineHeight: 2, marginBottom: 8,
-                    }}>
-                        تم تسجيل بصمة الوجه وقزحية العين بنجاح
-                    </p>
-                    <div style={{
-                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
-                        fontSize: 11, color: 'rgba(248,250,252,0.3)',
-                        marginBottom: 28,
-                    }}>
-                        <Sparkles size={12} />
-                        البيانات مؤمّنة ومقفلة بشكل دائم
-                    </div>
-
-                    {/* Summary chips */}
-                    <div style={{ display: 'flex', gap: 8, marginBottom: 28, justifyContent: 'center' }}>
-                        <div style={{
-                            padding: '8px 16px', borderRadius: 20,
-                            background: 'rgba(16,185,129,0.1)',
-                            border: '1px solid rgba(16,185,129,0.2)',
-                            fontSize: 11, fontWeight: 700, color: '#34d399',
-                            display: 'flex', alignItems: 'center', gap: 6,
-                        }}>
-                            <ScanFace size={14} /> الوجه ✓
-                        </div>
-                        <div style={{
-                            padding: '8px 16px', borderRadius: 20,
-                            background: 'rgba(16,185,129,0.1)',
-                            border: '1px solid rgba(16,185,129,0.2)',
-                            fontSize: 11, fontWeight: 700, color: '#34d399',
-                            display: 'flex', alignItems: 'center', gap: 6,
-                        }}>
-                            <Eye size={14} /> القزحية ✓
-                        </div>
-                    </div>
-
-                    <button
-                        onClick={handleDone}
-                        style={{
-                            width: '100%', padding: '16px',
-                            borderRadius: 14,
-                            background: 'linear-gradient(135deg, #10b981, #059669)',
-                            border: 'none', color: 'white',
-                            fontSize: 15, fontWeight: 800,
-                            cursor: 'pointer',
-                            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
-                            fontFamily: 'var(--font-arabic)',
-                            boxShadow: '0 8px 30px rgba(16,185,129,0.35)',
-                        }}
-                    >
-                        <Sparkles size={18} />
-                        الدخول إلى النظام
+                        <ArrowRight size={20} strokeWidth={2} />
+                        متابعة إلى التطبيق
                     </button>
                 </div>
-
-                <style>{`
-                    @keyframes float {
-                        0%, 100% { transform: translateX(-50%) translateY(0) scale(1); }
-                        50% { transform: translateX(-50%) translateY(-20px) scale(1.05); }
-                    }
-                    @keyframes pulse-glow-green {
-                        0%, 100% { box-shadow: 0 12px 40px rgba(16,185,129,0.3); }
-                        50% { box-shadow: 0 12px 60px rgba(16,185,129,0.5); }
-                    }
-                `}</style>
             </div>
         );
     }
 
-    // === FACE / IRIS CAPTURE ===
-    const isFaceStep = step === 'face';
-    const gradientColors = isFaceStep
-        ? 'linear-gradient(135deg, #3b82f6, #6366f1)'
-        : 'linear-gradient(135deg, #8b5cf6, #a855f7)';
-    const accentHex = isFaceStep ? '#3b82f6' : '#8b5cf6';
-    const glowColor = isFaceStep ? 'rgba(59,130,246,0.35)' : 'rgba(139,92,246,0.35)';
+    // ============================================================
+    // INTRO step
+    // ============================================================
+    if (mainStep === 'intro') {
+        return (
+            <div style={pageStyle}>
+                <div style={{ position: 'absolute', width: 300, height: 300, borderRadius: '50%', background: 'radial-gradient(circle, rgba(99,102,241,0.1), transparent 70%)', top: '5%', left: '-10%' }} />
+                <div style={{ position: 'absolute', width: 220, height: 220, borderRadius: '50%', background: 'radial-gradient(circle, rgba(16,185,129,0.06), transparent 70%)', bottom: '10%', right: '-5%' }} />
+
+                <div style={{ ...cardStyle, padding: '30px 22px', textAlign: 'center' }}>
+                    {/* Header */}
+                    <div style={{ marginBottom: 18 }}>
+                        <div style={{ width: 70, height: 70, borderRadius: '50%', background: 'linear-gradient(135deg, #3b82f6, #6366f1)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px', position: 'relative', boxShadow: '0 12px 40px rgba(99,102,241,0.35)' }}>
+                            <ScanFace size={32} color="white" strokeWidth={1.6} />
+                        </div>
+                        <h1 style={{ fontSize: 22, fontWeight: 900, color: '#f8fafc', marginBottom: 6, letterSpacing: -0.5 }}>
+                            تسجيل بصمة الوجه
+                        </h1>
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, marginBottom: 4 }}>
+                            <Shield size={13} color="rgba(248,250,252,0.3)" />
+                            <span style={{ fontSize: 11, color: 'rgba(248,250,252,0.3)', fontWeight: 600 }}>نظام تحقق بيومتري آمن</span>
+                        </div>
+                    </div>
+
+                    <p style={{ fontSize: 12.5, color: 'rgba(248,250,252,0.45)', lineHeight: 2, marginBottom: 22 }}>
+                        سيتم تصوير وجهك من <strong style={{ color: '#60a5fa' }}>3 زوايا مختلفة</strong> لتسجيل بصمة دقيقة<br />
+                        يتم حفظ <strong style={{ color: '#a78bfa' }}>embeddings رقمية فقط</strong> — بدون صور وجه<br />
+                        <span style={{ fontSize: 11, color: 'rgba(248,250,252,0.3)' }}>البيانات مشفّرة ولا يمكن استرجاع الوجه منها</span>
+                    </p>
+
+                    {/* Steps preview */}
+                    <div style={{ display: 'flex', gap: 8, marginBottom: 26 }}>
+                        {ANGLE_STEPS.map((s, i) => (
+                            <div key={s.angle} style={{
+                                flex: 1, padding: '14px 8px', textAlign: 'center', borderRadius: 14,
+                                background: completedAngles.has(s.angle) ? 'rgba(16,185,129,0.08)' : 'rgba(255,255,255,0.03)',
+                                border: `1px solid ${completedAngles.has(s.angle) ? 'rgba(16,185,129,0.25)' : 'rgba(255,255,255,0.06)'}`,
+                            }}>
+                                <div style={{ fontSize: 22, marginBottom: 6 }}>
+                                    {completedAngles.has(s.angle) ? '✅' : s.icon}
+                                </div>
+                                <div style={{ fontSize: 11, fontWeight: 700, color: completedAngles.has(s.angle) ? '#34d399' : '#94a3b8' }}>
+                                    {s.label}
+                                </div>
+                                <div style={{ fontSize: 9, marginTop: 4, color: completedAngles.has(s.angle) ? '#34d399' : 'rgba(255,255,255,0.25)', fontWeight: 600 }}>
+                                    {completedAngles.has(s.angle) ? '✓ مكتمل' : `خطوة ${i + 1}`}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+
+                    <button
+                        onClick={() => setMainStep('face_capture')}
+                        style={{
+                            width: '100%', padding: '16px', borderRadius: 14,
+                            background: 'linear-gradient(135deg, #3b82f6, #6366f1, #8b5cf6)',
+                            border: 'none', color: 'white', fontSize: 15, fontWeight: 800,
+                            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
+                            fontFamily: 'var(--font-arabic)', boxShadow: '0 8px 30px rgba(99,102,241,0.35)',
+                        }}
+                    >
+                        <ScanFace size={20} strokeWidth={2} />
+                        {completedAngles.size > 0 ? 'متابعة التسجيل' : 'بدء التسجيل البيومتري'}
+                    </button>
+                </div>
+            </div>
+        );
+    }
+
+    // ============================================================
+    // FACE CAPTURE step (3 angles)
+    // ============================================================
+    const angleStep = ANGLE_STEPS[currentAngleIdx];
 
     return (
         <div style={pageStyle}>
-            <div style={{
-                position: 'absolute', width: 280, height: 280, borderRadius: '50%',
-                background: `radial-gradient(circle, ${isFaceStep ? 'rgba(59,130,246,0.1)' : 'rgba(139,92,246,0.1)'}, transparent 70%)`,
-                top: '5%', right: '-5%', animation: 'float2 7s ease-in-out infinite',
-            }} />
+            <div style={{ position: 'absolute', width: 260, height: 260, borderRadius: '50%', background: `radial-gradient(circle, ${angleStep.glow.replace('0.35', '0.1')}, transparent 70%)`, top: '5%', right: '-5%' }} />
 
-            <div style={{ ...cardStyle, padding: '24px 20px' }}>
-                {/* Step progress bar */}
-                <div style={{
-                    display: 'flex', alignItems: 'center', gap: 6,
-                    marginBottom: 24, justifyContent: 'center',
-                }}>
-                    <div style={{
-                        display: 'flex', alignItems: 'center', gap: 6,
-                        padding: '6px 14px', borderRadius: 20,
-                        background: 'rgba(255,255,255,0.04)',
-                        border: '1px solid rgba(255,255,255,0.06)',
-                    }}>
-                        <div style={{
-                            width: 20, height: 20, borderRadius: '50%',
-                            background: isFaceStep ? gradientColors : '#10b981',
-                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            fontSize: 10, color: 'white', fontWeight: 800,
-                        }}>
-                            {faceRegistered ? '✓' : '1'}
-                        </div>
-                        <div style={{
-                            width: 28, height: 2, borderRadius: 1,
-                            background: faceRegistered ? '#10b981' : 'rgba(255,255,255,0.1)',
-                        }} />
-                        <div style={{
-                            width: 20, height: 20, borderRadius: '50%',
-                            background: !isFaceStep ? gradientColors : 'rgba(255,255,255,0.08)',
-                            display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            fontSize: 10, color: 'white', fontWeight: 800,
-                        }}>
-                            {irisRegistered ? '✓' : '2'}
-                        </div>
+            <div style={{ ...cardStyle, padding: '22px 18px' }}>
+                {/* Step indicator */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, marginBottom: 18 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 14px', borderRadius: 20, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.06)' }}>
+                        {ANGLE_STEPS.map((s, i) => (
+                            <React.Fragment key={s.angle}>
+                                <div style={{
+                                    width: 18, height: 18, borderRadius: '50%',
+                                    background: completedAngles.has(s.angle) ? '#10b981' : i === currentAngleIdx ? angleStep.gradient : 'rgba(255,255,255,0.08)',
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                    fontSize: 9, color: 'white', fontWeight: 800,
+                                }}>
+                                    {completedAngles.has(s.angle) ? '✓' : i + 1}
+                                </div>
+                                {i < ANGLE_STEPS.length - 1 && (
+                                    <div style={{ width: 14, height: 2, borderRadius: 1, background: completedAngles.has(ANGLE_STEPS[i + 1]?.angle) || completedAngles.has(s.angle) ? '#10b981' : 'rgba(255,255,255,0.08)' }} />
+                                )}
+                            </React.Fragment>
+                        ))}
                     </div>
                 </div>
 
                 {/* Title */}
-                <div style={{ textAlign: 'center', marginBottom: 18 }}>
-                    <div style={{
-                        width: 56, height: 56, borderRadius: '50%',
-                        background: gradientColors,
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        margin: '0 auto 14px',
-                        boxShadow: `0 8px 30px ${glowColor}`,
-                    }}>
-                        {isFaceStep
-                            ? <ScanFace size={26} color="white" strokeWidth={1.8} />
-                            : <Eye size={26} color="white" strokeWidth={1.8} />
-                        }
+                <div style={{ textAlign: 'center', marginBottom: 14 }}>
+                    <div style={{ width: 48, height: 48, borderRadius: '50%', background: angleStep.gradient, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 10px', boxShadow: `0 8px 28px ${angleStep.glow}`, fontSize: 22 }}>
+                        {angleStep.icon}
                     </div>
-                    <h2 style={{ fontSize: 19, fontWeight: 900, marginBottom: 6, color: '#f8fafc' }}>
-                        {isFaceStep ? 'تسجيل بصمة الوجه' : 'تسجيل قزحية العين'}
-                    </h2>
-                    <p style={{ fontSize: 12, color: 'rgba(248,250,252,0.4)', lineHeight: 1.8 }}>
-                        {isFaceStep
-                            ? 'وجّه وجهك للكاميرا مباشرة مع إضاءة جيدة'
-                            : 'وجّه عينيك للكاميرا مع فتحهما جيداً'
-                        }
-                    </p>
+                    <h2 style={{ fontSize: 17, fontWeight: 900, color: '#f8fafc', marginBottom: 4 }}>{angleStep.instruction}</h2>
+                    <p style={{ fontSize: 11.5, color: 'rgba(248,250,252,0.4)' }}>{angleStep.hint}</p>
                 </div>
 
                 {/* Camera viewfinder */}
-                <div style={{
-                    position: 'relative', width: '100%',
-                    aspectRatio: '4/3', borderRadius: 18,
-                    overflow: 'hidden', background: '#000',
-                    marginBottom: 16,
-                    border: `2px solid ${cameraReady ? accentHex : 'rgba(255,255,255,0.06)'}`,
-                    boxShadow: cameraReady ? `0 0 40px ${glowColor}` : 'none',
-                    transition: 'all 0.5s ease',
-                }}>
-                    <video
-                        ref={videoRef}
-                        autoPlay playsInline muted
-                        style={{
-                            width: '100%', height: '100%',
-                            objectFit: 'cover', transform: 'scaleX(-1)',
-                        }}
-                    />
+                <div style={{ position: 'relative', width: '100%', aspectRatio: '4/3', borderRadius: 16, overflow: 'hidden', background: '#000', marginBottom: 14, border: `2px solid ${cameraReady ? angleStep.glow.replace('0.35', '0.5') : 'rgba(255,255,255,0.06)'}`, boxShadow: cameraReady ? `0 0 40px ${angleStep.glow}` : 'none', transition: 'all 0.5s ease' }}>
+                    <video ref={videoRef} autoPlay playsInline muted style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }} />
 
-                    {/* Corner markers on camera */}
                     {cameraReady && !loading && (
                         <>
                             {['top-right', 'top-left', 'bottom-right', 'bottom-left'].map(pos => (
-                                <div key={pos} style={{
-                                    position: 'absolute',
-                                    [pos.includes('top') ? 'top' : 'bottom']: 12,
-                                    [pos.includes('right') ? 'right' : 'left']: 12,
-                                    width: 24, height: 24,
-                                    borderTop: pos.includes('top') ? `2px solid ${accentHex}` : 'none',
-                                    borderBottom: pos.includes('bottom') ? `2px solid ${accentHex}` : 'none',
-                                    borderRight: pos.includes('right') ? `2px solid ${accentHex}` : 'none',
-                                    borderLeft: pos.includes('left') ? `2px solid ${accentHex}` : 'none',
-                                    borderRadius: 4,
-                                    opacity: 0.7,
-                                }} />
+                                <div key={pos} style={{ position: 'absolute', [pos.includes('top') ? 'top' : 'bottom']: 12, [pos.includes('right') ? 'right' : 'left']: 12, width: 22, height: 22, borderTop: pos.includes('top') ? `2px solid ${angleStep.glow.replace('0.35', '0.7')}` : 'none', borderBottom: pos.includes('bottom') ? `2px solid ${angleStep.glow.replace('0.35', '0.7')}` : 'none', borderRight: pos.includes('right') ? `2px solid ${angleStep.glow.replace('0.35', '0.7')}` : 'none', borderLeft: pos.includes('left') ? `2px solid ${angleStep.glow.replace('0.35', '0.7')}` : 'none', opacity: 0.7, borderRadius: 3 }} />
                             ))}
                         </>
                     )}
 
-                    {!cameraReady && (
-                        <div style={{
-                            position: 'absolute', inset: 0,
-                            display: 'flex', flexDirection: 'column',
-                            alignItems: 'center', justifyContent: 'center',
-                            background: 'rgba(0,0,0,0.8)',
-                            gap: 12,
-                        }}>
-                            <div style={{
-                                width: 60, height: 60, borderRadius: '50%',
-                                background: 'rgba(255,255,255,0.06)',
-                                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                            }}>
-                                <Camera size={26} color="rgba(255,255,255,0.4)" />
+                    {/* Countdown overlay */}
+                    {countdown > 0 && (
+                        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(2px)' }}>
+                            <div style={{ width: 80, height: 80, borderRadius: '50%', background: angleStep.gradient, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 36, fontWeight: 900, color: 'white', boxShadow: `0 8px 30px ${angleStep.glow}` }}>
+                                {countdown}
                             </div>
-                            <button
-                                onClick={openCamera}
-                                style={{
-                                    padding: '12px 28px', borderRadius: 12,
-                                    background: gradientColors,
-                                    border: 'none', color: 'white',
-                                    fontSize: 13, fontWeight: 700,
-                                    cursor: 'pointer',
-                                    display: 'flex', alignItems: 'center', gap: 8,
-                                    fontFamily: 'var(--font-arabic)',
-                                    boxShadow: `0 6px 25px ${glowColor}`,
-                                }}
-                            >
-                                <Camera size={16} />
-                                تشغيل الكاميرا
-                            </button>
                         </div>
                     )}
 
-                    {/* Progress overlay */}
+                    {/* Loading overlay */}
                     {loading && (
-                        <div style={{
-                            position: 'absolute', inset: 0,
-                            display: 'flex', flexDirection: 'column',
-                            alignItems: 'center', justifyContent: 'center',
-                            background: 'rgba(0,0,0,0.65)',
-                            backdropFilter: 'blur(4px)',
-                        }}>
-                            <div style={{
-                                width: 56, height: 56, borderRadius: '50%',
-                                border: `3px solid rgba(255,255,255,0.1)`,
-                                borderTopColor: accentHex,
-                                animation: 'spin 0.8s linear infinite',
-                                marginBottom: 14,
-                            }} />
-                            <div style={{
-                                color: 'white', fontSize: 13, fontWeight: 700,
-                                marginBottom: 10,
-                            }}>
-                                {progressText}
+                        <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.65)', backdropFilter: 'blur(4px)' }}>
+                            <div style={{ width: 52, height: 52, borderRadius: '50%', border: '3px solid rgba(255,255,255,0.1)', borderTopColor: '#a78bfa', animation: 'spin 0.8s linear infinite', marginBottom: 14 }} />
+                            <div style={{ color: 'white', fontSize: 13, fontWeight: 700, marginBottom: 10 }}>{progressText}</div>
+                            <div style={{ width: '60%', height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.1)', overflow: 'hidden' }}>
+                                <div style={{ width: `${progress}%`, height: '100%', borderRadius: 2, background: angleStep.gradient, transition: 'width 0.3s ease' }} />
                             </div>
-                            <div style={{
-                                width: '65%', height: 5, borderRadius: 3,
-                                background: 'rgba(255,255,255,0.1)',
-                                overflow: 'hidden',
-                            }}>
-                                <div style={{
-                                    width: `${progress}%`, height: '100%',
-                                    borderRadius: 3, background: gradientColors,
-                                    transition: 'width 0.3s ease',
-                                    boxShadow: `0 0 12px ${glowColor}`,
-                                }} />
+                        </div>
+                    )}
+
+                    {/* Camera not started */}
+                    {!cameraReady && !loading && (
+                        <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.85)', gap: 14 }}>
+                            <div style={{ width: 56, height: 56, borderRadius: '50%', background: 'rgba(255,255,255,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                                <Camera size={24} color="rgba(255,255,255,0.4)" />
                             </div>
-                            <div style={{
-                                color: 'rgba(255,255,255,0.4)', fontSize: 10,
-                                marginTop: 8, fontWeight: 600,
-                            }}>
-                                {progress}%
-                            </div>
+                            <button onClick={openCamera} style={{ padding: '12px 28px', borderRadius: 12, background: angleStep.gradient, border: 'none', color: 'white', fontSize: 13, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'var(--font-arabic)', boxShadow: `0 6px 25px ${angleStep.glow}` }}>
+                                <Camera size={16} /> تشغيل الكاميرا
+                            </button>
                         </div>
                     )}
                 </div>
 
                 {/* Message */}
                 {message && (
-                    <div style={{
-                        padding: '12px 16px', borderRadius: 12,
-                        background: message.type === 'success'
-                            ? 'rgba(16,185,129,0.1)'
-                            : 'rgba(244,63,94,0.1)',
-                        border: `1px solid ${message.type === 'success'
-                            ? 'rgba(16,185,129,0.2)'
-                            : 'rgba(244,63,94,0.2)'}`,
-                        color: message.type === 'success' ? '#34d399' : '#fb7185',
-                        fontSize: 13, fontWeight: 700,
-                        textAlign: 'center', marginBottom: 14,
-                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
-                    }}>
-                        {message.type === 'success' ? <CheckCircle size={16} /> : null}
+                    <div style={{ padding: '10px 14px', borderRadius: 12, background: msgBg, border: `1px solid ${msgBorder}`, color: msgColor, fontSize: 12.5, fontWeight: 700, textAlign: 'center', marginBottom: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}>
+                        {message.type === 'success' && <CheckCircle size={15} />}
                         {message.text}
                     </div>
                 )}
 
                 {/* Capture button */}
-                {cameraReady && !loading && (
+                {cameraReady && !loading && countdown === 0 && (
                     <button
-                        onClick={isFaceStep ? handleCaptureFace : handleCaptureIris}
+                        onClick={startCaptureCountdown}
                         style={{
-                            width: '100%', padding: '16px',
-                            borderRadius: 14,
-                            background: gradientColors,
-                            border: 'none', color: 'white',
-                            fontSize: 15, fontWeight: 800,
-                            cursor: 'pointer',
+                            width: '100%', padding: '15px', borderRadius: 14,
+                            background: angleStep.gradient, border: 'none', color: 'white',
+                            fontSize: 15, fontWeight: 800, cursor: 'pointer',
                             display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
-                            fontFamily: 'var(--font-arabic)',
-                            boxShadow: `0 8px 30px ${glowColor}`,
-                            transition: 'all 0.2s ease',
+                            fontFamily: 'var(--font-arabic)', boxShadow: `0 8px 28px ${angleStep.glow}`,
                         }}
                     >
-                        <Camera size={18} strokeWidth={2} />
-                        {isFaceStep ? 'التقاط بصمة الوجه' : 'التقاط قزحية العين'}
+                        <ScanFace size={18} strokeWidth={2} />
+                        التقاط — {angleStep.label}
+                    </button>
+                )}
+
+                {/* Completed angles summary at bottom */}
+                {completedAngles.size > 0 && (
+                    <div style={{ display: 'flex', gap: 6, marginTop: 12 }}>
+                        {ANGLE_STEPS.map(s => completedAngles.has(s.angle) ? (
+                            <div key={s.angle} style={{ flex: 1, padding: '6px', textAlign: 'center', borderRadius: 8, background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)' }}>
+                                <span style={{ fontSize: 10, color: '#34d399', fontWeight: 700 }}>✓ {s.label}</span>
+                            </div>
+                        ) : null)}
+                    </div>
+                )}
+
+                {/* Reset option */}
+                {completedAngles.size > 0 && !loading && (
+                    <button
+                        onClick={() => {
+                            setCompletedAngles(new Set());
+                            setCurrentAngleIdx(0);
+                            setMessage(null);
+                        }}
+                        style={{
+                            marginTop: 10, padding: '8px 16px', borderRadius: 10,
+                            background: 'transparent', border: '1px solid rgba(255,255,255,0.06)',
+                            color: 'rgba(255,255,255,0.4)', fontSize: 11, fontWeight: 600,
+                            cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6,
+                            fontFamily: 'var(--font-arabic)', width: 'auto', margin: '10px auto 0',
+                        }}
+                    >
+                        <RotateCcw size={12} /> إعادة التسجيل
                     </button>
                 )}
             </div>
-
-            <style>{`
-                @keyframes spin { to { transform: rotate(360deg); } }
-                @keyframes float2 {
-                    0%, 100% { transform: translateY(0) scale(1); }
-                    50% { transform: translateY(-15px) scale(1.03); }
-                }
-            `}</style>
+            <style>{`@keyframes spin { to { transform: rotate(360deg); } }`}</style>
         </div>
     );
 }
