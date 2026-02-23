@@ -276,7 +276,7 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
                 <style>{css}</style>
 
                 {/* Modern Header */}
-                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', borderBottom: '1px solid var(--border-glass)', background: 'rgba(10, 14, 26, 0.8)', backdropFilter: 'blur(24px)', zIndex: 100, boxShadow: '0 4px 20px rgba(0,0,0,0.2)', flexShrink: 0 }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', paddingTop: 'calc(8px + env(safe-area-inset-top, 0px))', borderBottom: '1px solid var(--border-glass)', background: 'rgba(10, 14, 26, 0.95)', backdropFilter: 'blur(24px)', zIndex: 100, boxShadow: '0 4px 20px rgba(0,0,0,0.2)', flexShrink: 0 }}>
                     <button onClick={() => { setActiveChat(null); setShowEmoji(false); setEditMsg(null); setShowAttach(false); }} style={{ width: 34, height: 34, borderRadius: 10, background: 'var(--bg-glass)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)', flexShrink: 0 }}><ArrowRight size={18} /></button>
                     <div style={{ position: 'relative' }}>
                         <div style={{ width: 38, height: 38, borderRadius: '14px', background: otherUser.avatar ? `url(${otherUser.avatar}) center/cover` : 'linear-gradient(135deg,#6366f1,#8b5cf6)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: 14, fontWeight: 800, border: '2px solid var(--border-glass)', boxShadow: otherOnline ? '0 0 0 2px #22c55e, 0 10px 20px rgba(34,197,94,0.2)' : 'none' }}>{!otherUser.avatar && gi(otherUser.name)}</div>
