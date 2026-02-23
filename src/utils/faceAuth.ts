@@ -172,6 +172,9 @@ export interface LivenessTracker {
     headTurnDetected: boolean;
     textureScores: number[];     // Pixel variance scores
     startTime: number;
+    earBaseline: number;         // Running average EAR for relative blink detection
+    earMin: number;              // Minimum EAR observed
+    earMax: number;              // Maximum EAR observed
 }
 
 export function createLivenessTracker(): LivenessTracker {
@@ -183,6 +186,9 @@ export function createLivenessTracker(): LivenessTracker {
         headTurnDetected: false,
         textureScores: [],
         startTime: Date.now(),
+        earBaseline: 0,
+        earMin: 1,
+        earMax: 0,
     };
 }
 
@@ -299,15 +305,37 @@ export function updateLivenessTracker(tracker: LivenessTracker, frame: FaceScanF
     const ear = computeEAR(frame.landmarks);
     tracker.earHistory.push(ear);
 
-    // Detect blink: EAR drops below 0.20 then recovers above 0.25
+    // Update EAR min/max for variance detection
+    if (ear < tracker.earMin) tracker.earMin = ear;
+    if (ear > tracker.earMax) tracker.earMax = ear;
+
+    // Compute running baseline EAR (average of all readings)
+    const earSum = tracker.earHistory.reduce((a, b) => a + b, 0);
+    tracker.earBaseline = earSum / tracker.earHistory.length;
+
+    // BLINK DETECTION — Relative approach (works with any eye size)
+    // A blink is detected when EAR drops 25%+ below baseline, then recovers
     const earLen = tracker.earHistory.length;
-    if (earLen >= 3) {
+    if (earLen >= 3 && tracker.earBaseline > 0.05) {
         const prev2 = tracker.earHistory[earLen - 3];
         const prev1 = tracker.earHistory[earLen - 2];
         const curr = tracker.earHistory[earLen - 1];
-        // Closed -> Open transition
-        if (prev1 < 0.20 && prev2 > 0.23 && curr > 0.23) {
+        const threshold = tracker.earBaseline * 0.75; // 25% drop from baseline
+        const recovery = tracker.earBaseline * 0.85; // recovered to 85% of baseline
+
+        // Pattern: open → closed → open (relative to personal baseline)
+        if (prev2 > recovery && prev1 < threshold && curr > recovery) {
             tracker.blinkCount++;
+            console.log(`👁️ Blink detected! count=${tracker.blinkCount}, EAR: ${prev2.toFixed(3)}→${prev1.toFixed(3)}→${curr.toFixed(3)}, baseline=${tracker.earBaseline.toFixed(3)}`);
+        }
+
+        // Also detect blink via significant single-frame EAR drop
+        if (prev1 > recovery && curr < threshold && earLen >= 4) {
+            // Check if this is a new blink (not the same one being counted)
+            const prevPrev = tracker.earHistory[earLen - 4];
+            if (prevPrev > recovery) {
+                // Will be caught on the next frame when curr recovers
+            }
         }
     }
 
@@ -318,8 +346,8 @@ export function updateLivenessTracker(tracker: LivenessTracker, frame: FaceScanF
     if (tracker.headYawHistory.length >= 2) {
         const minYaw = Math.min(...tracker.headYawHistory);
         const maxYaw = Math.max(...tracker.headYawHistory);
-        // Require at least 0.10 normalized yaw change (about 10-15 degrees of head turn)
-        if (maxYaw - minYaw > 0.10) {
+        // Lowered from 0.10 to 0.06 for easier detection (about 6-8 degrees)
+        if (maxYaw - minYaw > 0.06) {
             tracker.headTurnDetected = true;
         }
     }
@@ -374,14 +402,15 @@ export function calculateAdvancedLivenessScore(tracker: LivenessTracker): {
     headTurnDetected: boolean;
     textureScore: number;
     movementScore: number;
+    earVariance: number;
     details: string;
 } {
     const frames = tracker.frames;
     if (frames.length < 3) {
-        return { score: 0, blinkDetected: false, headTurnDetected: false, textureScore: 0, movementScore: 0, details: 'جاري التحقق...' };
+        return { score: 0, blinkDetected: false, headTurnDetected: false, textureScore: 0, movementScore: 0, earVariance: 0, details: 'جاري التحقق...' };
     }
 
-    // 1. Movement score (20 points max)
+    // 1. Movement score (25 points max) — face must move naturally
     let totalMovement = 0;
     for (let i = 1; i < frames.length; i++) {
         const p = frames[i - 1], c = frames[i];
@@ -389,29 +418,37 @@ export function calculateAdvancedLivenessScore(tracker: LivenessTracker): {
         const dy = (c.box.y + c.box.height / 2) - (p.box.y + p.box.height / 2);
         totalMovement += Math.sqrt(dx * dx + dy * dy);
     }
-    const movementScore = Math.min((totalMovement / (frames.length * 3)), 1) * 20;
+    const movementScore = Math.min((totalMovement / (frames.length * 2)), 1) * 25;
 
-    // 2. Blink score (35 points max) — most reliable real-person indicator
-    const blinkDetected = tracker.blinkCount >= 1;
-    const blinkScore = blinkDetected ? 35 : 0;
+    // 2. Head turn score (30 points max) — primary liveness indicator
+    const headTurnScore = tracker.headTurnDetected ? 30 : 0;
 
-    // 3. Head turn score (25 points max)
-    const headTurnScore = tracker.headTurnDetected ? 25 : 0;
-
-    // 4. Texture score (20 points max) — anti-screen/print spoofing
+    // 3. Texture score (25 points max) — anti-screen/print spoofing
     const avgTexture = tracker.textureScores.length > 0
         ? tracker.textureScores.reduce((a, b) => a + b, 0) / tracker.textureScores.length
         : 0;
-    // Maps texture variance to 0-20 points. Real faces: ~15-40+, screens: <5
-    const textureScore = Math.min((avgTexture / 15), 1) * 20;
+    const textureScore = Math.min((avgTexture / 12), 1) * 25;
 
-    const totalScore = Math.min(Math.round(movementScore + blinkScore + headTurnScore + textureScore), 100);
+    // 4. EAR variance score (20 points max) — eye activity indicator
+    // Real eyes have natural micro-movements and blinks that create EAR variance
+    // Photos/screens have near-zero variance
+    const earVariance = tracker.earMax - tracker.earMin;
+    const earVarianceScore = Math.min((earVariance / 0.06), 1) * 20;
+
+    // Blink is a BONUS, not a requirement
+    const blinkDetected = tracker.blinkCount >= 1;
+    const blinkBonus = blinkDetected ? 10 : 0; // Extra points but not required
+
+    const totalScore = Math.min(Math.round(movementScore + headTurnScore + textureScore + earVarianceScore + blinkBonus), 100);
 
     let details = '';
-    if (!blinkDetected) details = 'يرجى الرمش بعينيك';
-    else if (!tracker.headTurnDetected) details = 'يرجى تحريك رأسك يميناً أو يساراً قليلاً';
+    if (totalScore < 20 && frames.length < 5) details = 'جاري التحقق...';
+    else if (!tracker.headTurnDetected) details = 'حرّك رأسك يميناً أو يساراً قليلاً';
     else if (avgTexture < 5) details = 'لا يمكن التحقق - يبدو أنك تعرض صورة';
-    else details = 'تم التحقق';
+    else if (earVariance < 0.02) details = 'ارمش بعينيك أو حرّك وجهك بشكل طبيعي';
+    else details = 'تم التحقق ✅';
+
+    console.log(`🔍 Liveness: score=${totalScore}, move=${movementScore.toFixed(1)}, turn=${headTurnScore}, tex=${textureScore.toFixed(1)}, earVar=${earVarianceScore.toFixed(1)}, blink=${blinkBonus}, earRange=${tracker.earMin.toFixed(3)}-${tracker.earMax.toFixed(3)}`);
 
     return {
         score: totalScore,
@@ -419,6 +456,7 @@ export function calculateAdvancedLivenessScore(tracker: LivenessTracker): {
         headTurnDetected: tracker.headTurnDetected,
         textureScore: Math.round(avgTexture),
         movementScore: Math.round(movementScore),
+        earVariance: Math.round(earVariance * 1000) / 1000,
         details,
     };
 }
@@ -711,21 +749,12 @@ export async function verifyFaceAdvanced(
                 };
             }
 
-            // Require blink + head turn (or high overall score)
-            if (liveness.score < 35) {
+            // Require reasonable liveness score (movement + head turn + texture + EAR variance)
+            // Blink is a BONUS, not required
+            if (liveness.score < 30) {
                 return {
                     success: false,
-                    error: liveness.details || 'يرجى الرمش بعينيك وتحريك رأسك قليلاً',
-                    confidence,
-                    livenessScore: liveness.score,
-                };
-            }
-
-            // After many frames, blink is mandatory
-            if (!liveness.blinkDetected && livenessTracker.frames.length >= 20) {
-                return {
-                    success: false,
-                    error: 'يرجى الرمش بعينيك مرة واحدة على الأقل',
+                    error: liveness.details || 'حرّك رأسك قليلاً للتحقق من هويتك',
                     confidence,
                     livenessScore: liveness.score,
                 };
