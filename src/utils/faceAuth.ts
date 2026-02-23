@@ -985,7 +985,7 @@ export async function loadAllFaceDescriptors(userId: string): Promise<Array<{
     angle: FaceAngle;
     descriptor: Float32Array;
 }>> {
-    const angles: FaceAngle[] = ['front', 'right', 'left', 'up', 'down'];
+    const angles: FaceAngle[] = ['front', 'right', 'left', 'up'];
     const results: Array<{ angle: FaceAngle; descriptor: Float32Array }> = [];
 
     for (const angle of angles) {
@@ -1504,7 +1504,7 @@ export async function checkFaceBiometricRegistered(userId: string): Promise<bool
  */
 export async function ensureBiometricDataLoaded(userId: string): Promise<void> {
     try {
-        const angles: FaceAngle[] = ['front', 'right', 'left', 'up', 'down'];
+        const angles: FaceAngle[] = ['front', 'right', 'left', 'up'];
         const promises: Promise<void>[] = [];
 
         for (const angle of angles) {
