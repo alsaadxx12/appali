@@ -808,144 +808,147 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
 
     // ================= MAIN CHAT LIST =================
     return (
-        <div className="page-content page-enter chat-root" style={{ padding: '16px 12px', background: 'var(--bg-primary)' }}>
-            <style>{css}</style>
+        <>
+            <div className="page-content page-enter chat-root" style={{ padding: '16px 12px', background: 'var(--bg-primary)' }}>
+                <style>{css}</style>
 
-            {/* Settings Button */}
-            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16, padding: '0 4px' }}>
-                <button onClick={() => setShowBgPicker(true)} style={{ width: 40, height: 40, borderRadius: 12, background: 'var(--bg-glass)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent-blue)', border: '1px solid var(--border-glass)' }}>
-                    <Edit3 size={18} />
-                </button>
-            </div>
-
-            {/* Stories-like Employee List */}
-            <div style={{ marginBottom: 28 }}>
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, padding: '0 4px' }}>
-                    <span style={{ fontSize: 14, fontWeight: 900, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 6 }}><Users size={16} color="#6366f1" /> فريق العمل</span>
-                    <span style={{ fontSize: 11, fontWeight: 800, color: 'var(--text-muted)' }}>{allUsers.length} متوفر</span>
+                {/* Settings Button */}
+                <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16, padding: '0 4px' }}>
+                    <button onClick={() => setShowBgPicker(true)} style={{ width: 40, height: 40, borderRadius: 12, background: 'var(--bg-glass)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent-blue)', border: '1px solid var(--border-glass)' }}>
+                        <Edit3 size={18} />
+                    </button>
                 </div>
-                <div style={{ display: 'flex', gap: 14, overflowX: 'auto', padding: '4px', scrollbarWidth: 'none' }} className="stories-container">
-                    {allUsers.map(u => (
-                        <button key={u.id} onClick={() => openChatWith(u)} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, minWidth: 72, transition: 'transform 0.2s' }}>
-                            <div style={{ position: 'relative' }}>
-                                <div style={{
-                                    width: 64, height: 64, borderRadius: '50%',
-                                    background: u.avatar ? `url(${u.avatar}) center/cover` : 'linear-gradient(135deg, #6366f1, #3b82f6)',
-                                    border: u.online ? '3px solid #22c55e' : '3px solid var(--border-glass)',
-                                    display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 900, fontSize: 18,
-                                    padding: 3, boxSizing: 'content-box',
-                                    boxShadow: u.online ? '0 8px 20px rgba(34, 197, 94, 0.2)' : 'none'
-                                }}>
-                                    {!u.avatar && gi(u.name)}
-                                </div>
-                                {u.online && <div style={{ position: 'absolute', bottom: 4, right: 4, width: 14, height: 14, background: '#22c55e', borderRadius: '50%', border: '3px solid #0a0e1a' }} />}
-                            </div>
-                            <span style={{ fontSize: 11, fontWeight: 800, color: 'var(--text-primary)', maxWidth: 70, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.name.split(' ')[0]}</span>
-                        </button>
-                    ))}
-                    {allUsers.length === 0 && usersLoaded && <div style={{ color: 'var(--text-muted)', fontSize: 13, padding: 20 }}>لا يوجد موظفين حالياً</div>}
-                </div>
-            </div>
 
-            {/* Search Redesign */}
-            <div className="glass-input" style={{ position: 'relative', marginBottom: 28, borderRadius: 20, display: 'flex', alignItems: 'center', padding: '2px 8px' }}>
-                <Search size={18} style={{ color: 'var(--text-muted)', marginLeft: 10 }} />
-                <input
-                    type="text" placeholder="بحث في المحادثات ..."
-                    value={search} onChange={e => setSearch(e.target.value)}
-                    style={{
-                        width: '100%', padding: '14px 4px', background: 'transparent', border: 'none', outline: 'none',
-                        fontSize: 14.5, fontWeight: 700, color: 'var(--text-primary)', fontFamily: 'var(--font-arabic)'
-                    }}
-                />
-            </div>
-
-            {/* Filter Tabs */}
-            <div style={{ display: 'flex', gap: 8, marginBottom: 16, padding: '0 4px', overflowX: 'auto', scrollbarWidth: 'none' }}>
-                {(['all', 'unread', 'archived'] as const).map(f => {
-                    const labels = { all: 'الكل', unread: 'غير مقروءة', archived: 'الأرشيف' };
-                    const icons = { all: <MessageCircle size={14} />, unread: <Clock size={14} />, archived: <Archive size={14} /> };
-                    return (
-                        <button key={f} onClick={() => setChatFilter(f)} style={{
-                            display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', borderRadius: 14,
-                            background: chatFilter === f ? 'linear-gradient(135deg, #4f46e5, #3b82f6)' : 'var(--bg-glass)',
-                            color: chatFilter === f ? 'white' : 'var(--text-secondary)',
-                            border: chatFilter === f ? 'none' : '1px solid var(--border-glass)',
-                            fontSize: 12, fontWeight: 800, whiteSpace: 'nowrap',
-                            boxShadow: chatFilter === f ? '0 4px 12px rgba(79,70,229,0.3)' : 'none',
-                            transition: 'all 0.2s',
-                        }}>{icons[f]}{labels[f]}</button>
-                    );
-                })}
-            </div>
-
-            {/* Conversations List */}
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-                {loading ? (
-                    <div style={{ textAlign: 'center', padding: 40, opacity: 0.5 }}><Loader2 size={32} className="spin" style={{ animation: 'spin 1s linear infinite' }} /></div>
-                ) : convs.length === 0 ? (
-                    <div style={{ textAlign: 'center', padding: '60px 20px', background: 'var(--bg-glass)', borderRadius: 24, border: '1px solid var(--border-glass)' }}>
-                        <div style={{ width: 64, height: 64, borderRadius: 20, background: 'var(--accent-blue-soft)', color: 'var(--accent-blue)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}><MessageCircle size={32} /></div>
-                        <div style={{ fontSize: 16, fontWeight: 900, marginBottom: 4 }}>لا توجد محادثات</div>
-                        <div style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>ابدأ محادثة جديدة مع أحد زملائك</div>
+                {/* Stories-like Employee List */}
+                <div style={{ marginBottom: 28 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14, padding: '0 4px' }}>
+                        <span style={{ fontSize: 14, fontWeight: 900, color: 'var(--text-primary)', display: 'flex', alignItems: 'center', gap: 6 }}><Users size={16} color="#6366f1" /> فريق العمل</span>
+                        <span style={{ fontSize: 11, fontWeight: 800, color: 'var(--text-muted)' }}>{allUsers.length} متوفر</span>
                     </div>
-                ) : convs.filter(c => {
-                    const oid = c.participants.find(p => p !== uid) || '';
-                    const on = c.participantNames?.[oid] || '';
-                    const isArchived = c.archived?.[uid] === true;
-                    const rd = (c as any).readBy || {}, lr = rd[uid], lm = c.lastMessageAt, ls = (c as any).lastSenderId;
-                    const unread = lm && ls && ls !== uid && (!lr || (lr.toMillis && lm.toMillis && lr.toMillis() < lm.toMillis()));
-
-                    if (search.trim() && !on.includes(search)) return false;
-                    if (chatFilter === 'archived') return isArchived;
-                    if (chatFilter === 'unread') return !isArchived && unread;
-                    return !isArchived; // 'all' hides archived
-                }).map(c => {
-                    const oid = c.participants.find(p => p !== uid) || '';
-                    const on = c.participantNames?.[oid] || 'مستخدم';
-                    const av = (c as any).participantAvatars?.[oid] || allUsers.find(u => u.id === oid)?.avatar;
-                    const rd = (c as any).readBy || {}, lr = rd[uid], lm = c.lastMessageAt, ls = (c as any).lastSenderId;
-                    const unread = lm && ls && ls !== uid && (!lr || (lr.toMillis && lm.toMillis && lr.toMillis() < lm.toMillis()));
-
-                    return (
-                        <div key={c.id} style={{ position: 'relative' }} className="conv-item-wrapper" onContextMenu={e => { e.preventDefault(); setLongPressConv(c.id); }}>
-                            <button
-                                onClick={() => openExisting(c)}
-                                className={`conv-item ${unread ? 'unread' : ''}`}
-                                style={{
-                                    display: 'flex', alignItems: 'center', gap: 14, padding: '16px',
-                                    borderRadius: 24, background: 'var(--bg-card)', border: '1px solid var(--border-glass)',
-                                    width: '100%', textAlign: 'right', boxShadow: '0 4px 12px rgba(0,0,0,0.05)'
-                                }}
-                            >
-                                <div style={{
-                                    width: 56, height: 56, borderRadius: 20,
-                                    background: av ? `url(${av}) center/cover` : 'linear-gradient(135deg, #10b981, #3b82f6)',
-                                    display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: 18, fontWeight: 900, flexShrink: 0
-                                }}>
-                                    {!av && gi(on)}
-                                </div>
-                                <div style={{ flex: 1, minWidth: 0 }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
-                                        <span style={{ fontSize: 16, fontWeight: 900, color: 'var(--text-primary)' }}>{on}</span>
-                                        <span style={{ fontSize: 11, fontWeight: 800, color: 'var(--text-muted)' }}>{ft(c.lastMessageAt)}</span>
+                    <div style={{ display: 'flex', gap: 14, overflowX: 'auto', padding: '4px', scrollbarWidth: 'none' }} className="stories-container">
+                        {allUsers.map(u => (
+                            <button key={u.id} onClick={() => openChatWith(u)} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, minWidth: 72, transition: 'transform 0.2s' }}>
+                                <div style={{ position: 'relative' }}>
+                                    <div style={{
+                                        width: 64, height: 64, borderRadius: '50%',
+                                        background: u.avatar ? `url(${u.avatar}) center/cover` : 'linear-gradient(135deg, #6366f1, #3b82f6)',
+                                        border: u.online ? '3px solid #22c55e' : '3px solid var(--border-glass)',
+                                        display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 900, fontSize: 18,
+                                        padding: 3, boxSizing: 'content-box',
+                                        boxShadow: u.online ? '0 8px 20px rgba(34, 197, 94, 0.2)' : 'none'
+                                    }}>
+                                        {!u.avatar && gi(u.name)}
                                     </div>
-                                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                                        <p style={{
-                                            fontSize: 13, color: unread ? 'var(--text-primary)' : 'var(--text-muted)',
-                                            fontWeight: unread ? 800 : 500, margin: 0,
-                                            whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1
-                                        }}>
-                                            {c.lastSenderId === uid ? 'أنت: ' : ''}{c.lastMessage || 'بدء المحادثة ...'}
-                                        </p>
-                                        {unread && <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#3b82f6', boxShadow: '0 0 10px rgba(59,130,246,0.6)' }} />}
-                                    </div>
+                                    {u.online && <div style={{ position: 'absolute', bottom: 4, right: 4, width: 14, height: 14, background: '#22c55e', borderRadius: '50%', border: '3px solid #0a0e1a' }} />}
                                 </div>
+                                <span style={{ fontSize: 11, fontWeight: 800, color: 'var(--text-primary)', maxWidth: 70, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{u.name.split(' ')[0]}</span>
                             </button>
+                        ))}
+                        {allUsers.length === 0 && usersLoaded && <div style={{ color: 'var(--text-muted)', fontSize: 13, padding: 20 }}>لا يوجد موظفين حالياً</div>}
+                    </div>
+                </div>
 
+                {/* Search Redesign */}
+                <div className="glass-input" style={{ position: 'relative', marginBottom: 28, borderRadius: 20, display: 'flex', alignItems: 'center', padding: '2px 8px' }}>
+                    <Search size={18} style={{ color: 'var(--text-muted)', marginLeft: 10 }} />
+                    <input
+                        type="text" placeholder="بحث في المحادثات ..."
+                        value={search} onChange={e => setSearch(e.target.value)}
+                        style={{
+                            width: '100%', padding: '14px 4px', background: 'transparent', border: 'none', outline: 'none',
+                            fontSize: 14.5, fontWeight: 700, color: 'var(--text-primary)', fontFamily: 'var(--font-arabic)'
+                        }}
+                    />
+                </div>
+
+                {/* Filter Tabs */}
+                <div style={{ display: 'flex', gap: 8, marginBottom: 16, padding: '0 4px', overflowX: 'auto', scrollbarWidth: 'none' }}>
+                    {(['all', 'unread', 'archived'] as const).map(f => {
+                        const labels = { all: 'الكل', unread: 'غير مقروءة', archived: 'الأرشيف' };
+                        const icons = { all: <MessageCircle size={14} />, unread: <Clock size={14} />, archived: <Archive size={14} /> };
+                        return (
+                            <button key={f} onClick={() => setChatFilter(f)} style={{
+                                display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', borderRadius: 14,
+                                background: chatFilter === f ? 'linear-gradient(135deg, #4f46e5, #3b82f6)' : 'var(--bg-glass)',
+                                color: chatFilter === f ? 'white' : 'var(--text-secondary)',
+                                border: chatFilter === f ? 'none' : '1px solid var(--border-glass)',
+                                fontSize: 12, fontWeight: 800, whiteSpace: 'nowrap',
+                                boxShadow: chatFilter === f ? '0 4px 12px rgba(79,70,229,0.3)' : 'none',
+                                transition: 'all 0.2s',
+                            }}>{icons[f]}{labels[f]}</button>
+                        );
+                    })}
+                </div>
+
+                {/* Conversations List */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                    {loading ? (
+                        <div style={{ textAlign: 'center', padding: 40, opacity: 0.5 }}><Loader2 size={32} className="spin" style={{ animation: 'spin 1s linear infinite' }} /></div>
+                    ) : convs.length === 0 ? (
+                        <div style={{ textAlign: 'center', padding: '60px 20px', background: 'var(--bg-glass)', borderRadius: 24, border: '1px solid var(--border-glass)' }}>
+                            <div style={{ width: 64, height: 64, borderRadius: 20, background: 'var(--accent-blue-soft)', color: 'var(--accent-blue)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px' }}><MessageCircle size={32} /></div>
+                            <div style={{ fontSize: 16, fontWeight: 900, marginBottom: 4 }}>لا توجد محادثات</div>
+                            <div style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>ابدأ محادثة جديدة مع أحد زملائك</div>
                         </div>
-                    );
-                })}
+                    ) : convs.filter(c => {
+                        const oid = c.participants.find(p => p !== uid) || '';
+                        const on = c.participantNames?.[oid] || '';
+                        const isArchived = c.archived?.[uid] === true;
+                        const rd = (c as any).readBy || {}, lr = rd[uid], lm = c.lastMessageAt, ls = (c as any).lastSenderId;
+                        const unread = lm && ls && ls !== uid && (!lr || (lr.toMillis && lm.toMillis && lr.toMillis() < lm.toMillis()));
+
+                        if (search.trim() && !on.includes(search)) return false;
+                        if (chatFilter === 'archived') return isArchived;
+                        if (chatFilter === 'unread') return !isArchived && unread;
+                        return !isArchived; // 'all' hides archived
+                    }).map(c => {
+                        const oid = c.participants.find(p => p !== uid) || '';
+                        const on = c.participantNames?.[oid] || 'مستخدم';
+                        const av = (c as any).participantAvatars?.[oid] || allUsers.find(u => u.id === oid)?.avatar;
+                        const rd = (c as any).readBy || {}, lr = rd[uid], lm = c.lastMessageAt, ls = (c as any).lastSenderId;
+                        const unread = lm && ls && ls !== uid && (!lr || (lr.toMillis && lm.toMillis && lr.toMillis() < lm.toMillis()));
+
+                        return (
+                            <div key={c.id} style={{ position: 'relative' }} className="conv-item-wrapper" onContextMenu={e => { e.preventDefault(); setLongPressConv(c.id); }}>
+                                <button
+                                    onClick={() => openExisting(c)}
+                                    className={`conv-item ${unread ? 'unread' : ''}`}
+                                    style={{
+                                        display: 'flex', alignItems: 'center', gap: 14, padding: '16px',
+                                        borderRadius: 24, background: 'var(--bg-card)', border: '1px solid var(--border-glass)',
+                                        width: '100%', textAlign: 'right', boxShadow: '0 4px 12px rgba(0,0,0,0.05)'
+                                    }}
+                                >
+                                    <div style={{
+                                        width: 56, height: 56, borderRadius: 20,
+                                        background: av ? `url(${av}) center/cover` : 'linear-gradient(135deg, #10b981, #3b82f6)',
+                                        display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: 18, fontWeight: 900, flexShrink: 0
+                                    }}>
+                                        {!av && gi(on)}
+                                    </div>
+                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                                            <span style={{ fontSize: 16, fontWeight: 900, color: 'var(--text-primary)' }}>{on}</span>
+                                            <span style={{ fontSize: 11, fontWeight: 800, color: 'var(--text-muted)' }}>{ft(c.lastMessageAt)}</span>
+                                        </div>
+                                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                            <p style={{
+                                                fontSize: 13, color: unread ? 'var(--text-primary)' : 'var(--text-muted)',
+                                                fontWeight: unread ? 800 : 500, margin: 0,
+                                                whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', flex: 1
+                                            }}>
+                                                {c.lastSenderId === uid ? 'أنت: ' : ''}{c.lastMessage || 'بدء المحادثة ...'}
+                                            </p>
+                                            {unread && <div style={{ width: 10, height: 10, borderRadius: '50%', background: '#3b82f6', boxShadow: '0 0 10px rgba(59,130,246,0.6)' }} />}
+                                        </div>
+                                    </div>
+                                </button>
+
+                            </div>
+                        );
+                    })}
+                </div>
+
             </div>
 
             {/* Long-press bottom sheet overlay */}
@@ -1117,6 +1120,6 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
             )}
             <audio ref={remoteAudioRef} autoPlay playsInline style={{ display: 'none' }} />
             <audio ref={ringtoneRef} src="data:audio/wav;base64,UklGRiQGAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAGAACAgICAgICAgICAgICAgICAgICAf3B3c3Bwb3Bwb3Bwb3Bwb3Bwb3N/i5WZnJ+goKCgoKCfnJmVi39wY1dRTUpHREFAQEBBREhMT1VdZ3uLmaCkp6enp6enp6SgmIl7a1lMREA+PDs5ODg4OTo8PkBGTldjdIiWn6Woqampqainol+UhHFdTUI7Nzc1NTMzMzM1NTc3PEhXaXqLmKGmqayrq6uqp6KdlYl8bl9SRz45NjQ0MjIyMjQ0NjhCUmJxgZCcoKWpq62trauop6OckoR4bF9TSD44NjQ0NDMzMzQ0NjhCUmFxgJCaoKWpq62ura6rpqKdloh8bl9SR0A3NjQ0NDMzMzQ0NjhCUmFxgJCapqerr7Ozs7OxrailnZOGd21gUkhCOzY0NDQzMzMzNDQ2OEJSYnGAkJigrK6ztLS0tLGtqKWdkoR4bGBUSkM7OEWQZ3Z5fYCCgYKBf318eHNvamNZUEdAPDk4NjU1NTU2ODg8QEdSX2x7iZaikJ2goKCgoKCfnJqWkYqBd2xfU0hCPDs5ODc3Nzc4ODk7PEJIUl5sdIGOmKChpqioqKiop6ShnpqTin96b2FWTERAPj08PDs7OztAPj5ARFBYZ294gIqQn5+kp6ioqKinpKGenpqTin94b2JXTkZCQD49PDs7Ozs8Pj5ARFBYZnN8hIyUl5ydoKOjo6OjoJ2bnJiTin94cGRYUEhEQkA+PT09PD0+PkBERFBWYm13gImQlJmc" playsInline style={{ display: 'none' }} />
-        </div >
+        </>
     );
 }
