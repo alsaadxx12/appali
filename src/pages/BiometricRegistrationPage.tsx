@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Camera, CheckCircle, Shield, ScanFace, Sparkles, ArrowRight, RotateCcw } from 'lucide-react';
+import { CheckCircle, Shield, ScanFace, ArrowRight, RotateCcw, Camera, ChevronRight } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import {
     loadFaceModels,
@@ -14,43 +14,61 @@ interface Props {
     onComplete: () => void;
 }
 
-interface AngleStep {
+interface DirectionStep {
     angle: FaceAngle;
     label: string;
     instruction: string;
-    hint: string;
     icon: string;
+    color: string;
     gradient: string;
     glow: string;
 }
 
-const ANGLE_STEPS: AngleStep[] = [
+const DIRECTION_STEPS: DirectionStep[] = [
     {
         angle: 'front',
         label: 'أمام',
         instruction: 'انظر مباشرة إلى الكاميرا',
-        hint: 'سيتم تسجيل فيديو 3 ثوانٍ — ارمش بشكل طبيعي وابتسم قليلاً',
         icon: '😐',
-        gradient: 'linear-gradient(135deg, #3b82f6, #6366f1)',
-        glow: 'rgba(59,130,246,0.35)',
+        color: '#6366f1',
+        gradient: 'linear-gradient(135deg, #6366f1, #8b5cf6)',
+        glow: 'rgba(99,102,241,0.4)',
     },
     {
         angle: 'right',
         label: 'يمين',
-        instruction: 'أدِر وجهك قليلاً نحو اليمين',
-        hint: 'سيتم تسجيل فيديو 3 ثوانٍ — أمِل رأسك نحو اليمين وارمش',
+        instruction: 'لف رأسك لليمين',
         icon: '👉',
+        color: '#f59e0b',
         gradient: 'linear-gradient(135deg, #f59e0b, #f97316)',
-        glow: 'rgba(245,158,11,0.35)',
+        glow: 'rgba(245,158,11,0.4)',
     },
     {
         angle: 'left',
         label: 'يسار',
-        instruction: 'أدِر وجهك قليلاً نحو اليسار',
-        hint: 'سيتم تسجيل فيديو 3 ثوانٍ — أمِل رأسك نحو اليسار وابتسم',
+        instruction: 'لف رأسك لليسار',
         icon: '👈',
+        color: '#3b82f6',
+        gradient: 'linear-gradient(135deg, #3b82f6, #2563eb)',
+        glow: 'rgba(59,130,246,0.4)',
+    },
+    {
+        angle: 'up',
+        label: 'أعلى',
+        instruction: 'ارفع رأسك لفوق',
+        icon: '☝️',
+        color: '#10b981',
         gradient: 'linear-gradient(135deg, #10b981, #059669)',
-        glow: 'rgba(16,185,129,0.35)',
+        glow: 'rgba(16,185,129,0.4)',
+    },
+    {
+        angle: 'down',
+        label: 'أسفل',
+        instruction: 'نزّل رأسك لجوه',
+        icon: '👇',
+        color: '#ec4899',
+        gradient: 'linear-gradient(135deg, #ec4899, #db2777)',
+        glow: 'rgba(236,72,153,0.4)',
     },
 ];
 
@@ -58,53 +76,43 @@ export default function BiometricRegistrationPage({ onComplete }: Props) {
     const { user } = useAuth();
     const userId = user?.id || '';
 
-    // Main step state: intro / face_capture / done
     const [mainStep, setMainStep] = useState<'intro' | 'face_capture' | 'done'>('intro');
-
-    // Per-angle registration state
-    const [currentAngleIdx, setCurrentAngleIdx] = useState(0);
+    const [currentIdx, setCurrentIdx] = useState(0);
     const [completedAngles, setCompletedAngles] = useState<Set<FaceAngle>>(new Set());
 
-    // Camera/loading state
     const [loading, setLoading] = useState(false);
     const [cameraReady, setCameraReady] = useState(false);
     const [progressText, setProgressText] = useState('');
     const [progress, setProgress] = useState(0);
     const [message, setMessage] = useState<{ type: 'success' | 'error' | 'info'; text: string } | null>(null);
     const [countdown, setCountdown] = useState(0);
+    const [recording, setRecording] = useState(false);
 
     const videoRef = useRef<HTMLVideoElement>(null);
     const streamRef = useRef<MediaStream | null>(null);
     const countdownRef = useRef<any>(null);
 
-    // On mount — check which angles are already done
+    // Check completed angles on mount
     useEffect(() => {
         const check = async () => {
             if (!userId) return;
-            const [front, right, left] = await Promise.all([
-                isFaceAngleRegistered(userId, 'front'),
-                isFaceAngleRegistered(userId, 'right'),
-                isFaceAngleRegistered(userId, 'left'),
-            ]);
+            const checks = await Promise.all(
+                DIRECTION_STEPS.map(s => isFaceAngleRegistered(userId, s.angle))
+            );
             const done = new Set<FaceAngle>();
-            if (front) done.add('front');
-            if (right) done.add('right');
-            if (left) done.add('left');
+            checks.forEach((ok, i) => { if (ok) done.add(DIRECTION_STEPS[i].angle); });
             setCompletedAngles(done);
 
-            // Determine starting state
-            if (done.size >= 3) {
+            if (done.size >= DIRECTION_STEPS.length) {
                 setMainStep('done');
             } else {
-                // Find first incomplete angle
-                const firstIncomplete = ANGLE_STEPS.findIndex(s => !done.has(s.angle));
-                if (firstIncomplete >= 0) setCurrentAngleIdx(firstIncomplete);
+                const firstIncomplete = DIRECTION_STEPS.findIndex(s => !done.has(s.angle));
+                if (firstIncomplete >= 0) setCurrentIdx(firstIncomplete);
             }
         };
         check();
     }, [userId]);
 
-    // Cleanup camera on unmount
     useEffect(() => {
         return () => {
             stopCamera(streamRef.current);
@@ -124,13 +132,11 @@ export default function BiometricRegistrationPage({ onComplete }: Props) {
         if (stream) {
             streamRef.current = stream;
             setCameraReady(true);
-            setMessage({ type: 'info', text: ANGLE_STEPS[currentAngleIdx].hint });
         } else {
             setMessage({ type: 'error', text: 'فشل الوصول للكاميرا. تأكد من الصلاحيات.' });
         }
     };
 
-    // Countdown before capturing (3 seconds)
     const startCaptureCountdown = () => {
         setCountdown(3);
         countdownRef.current = setInterval(() => {
@@ -147,15 +153,16 @@ export default function BiometricRegistrationPage({ onComplete }: Props) {
 
     const captureCurrentAngle = async () => {
         if (!videoRef.current || !userId) return;
-        const angleStep = ANGLE_STEPS[currentAngleIdx];
+        const step = DIRECTION_STEPS[currentIdx];
         setLoading(true);
+        setRecording(true);
         setMessage(null);
         setProgress(0);
 
         const result = await registerFaceAngle({
             userId,
             video: videoRef.current,
-            angle: angleStep.angle,
+            angle: step.angle,
             onProgress: (text, p) => {
                 setProgressText(text);
                 setProgress(p);
@@ -163,31 +170,27 @@ export default function BiometricRegistrationPage({ onComplete }: Props) {
         });
 
         setLoading(false);
+        setRecording(false);
         if (result.success) {
             const newCompleted = new Set(completedAngles);
-            newCompleted.add(angleStep.angle);
+            newCompleted.add(step.angle);
             setCompletedAngles(newCompleted);
-            setMessage({ type: 'success', text: `✅ تم تسجيل فيديو ${angleStep.label} بنجاح!` });
+            setMessage({ type: 'success', text: `✅ تم تسجيل "${step.label}" بنجاح!` });
 
-            // Check if all 3 angles done
-            if (newCompleted.size >= 3) {
+            if (newCompleted.size >= DIRECTION_STEPS.length) {
                 stopCamera(streamRef.current);
                 streamRef.current = null;
                 setCameraReady(false);
-                setTimeout(() => {
-                    setMessage(null);
-                    setMainStep('done');
-                }, 1500);
+                setTimeout(() => { setMessage(null); setMainStep('done'); }, 1200);
             } else {
-                // Move to next angle
                 setTimeout(() => {
                     setMessage(null);
-                    const nextIdx = ANGLE_STEPS.findIndex(s => !newCompleted.has(s.angle));
-                    if (nextIdx >= 0) setCurrentAngleIdx(nextIdx);
-                }, 1500);
+                    const nextIdx = DIRECTION_STEPS.findIndex(s => !newCompleted.has(s.angle));
+                    if (nextIdx >= 0) setCurrentIdx(nextIdx);
+                }, 1200);
             }
         } else {
-            setMessage({ type: 'error', text: result.error || 'فشل تسجيل الفيديو' });
+            setMessage({ type: 'error', text: result.error || 'فشل التسجيل، حاول مرة أخرى' });
         }
     };
 
@@ -201,228 +204,343 @@ export default function BiometricRegistrationPage({ onComplete }: Props) {
         onComplete();
     };
 
-    // ============================================================
-    // STYLES
-    // ============================================================
+    const msgBg = message?.type === 'success' ? 'rgba(16,185,129,0.08)' : message?.type === 'error' ? 'rgba(239,68,68,0.08)' : 'rgba(59,130,246,0.08)';
+    const msgBorder = message?.type === 'success' ? 'rgba(16,185,129,0.2)' : message?.type === 'error' ? 'rgba(239,68,68,0.2)' : 'rgba(59,130,246,0.2)';
+    const msgColor = message?.type === 'success' ? '#34d399' : message?.type === 'error' ? '#f87171' : '#60a5fa';
 
-    const pageStyle: React.CSSProperties = {
-        minHeight: '100vh',
-        background: 'linear-gradient(180deg, #0a0e1a 0%, #0f1629 60%, #111827 100%)',
-        display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
-        padding: '24px 16px', fontFamily: 'var(--font-arabic)', direction: 'rtl',
-        position: 'relative', overflow: 'hidden',
-    };
-
-    const cardStyle: React.CSSProperties = {
-        width: '100%', maxWidth: 400, background: 'rgba(255,255,255,0.03)', backdropFilter: 'blur(28px)',
-        borderRadius: 24, padding: '26px 20px', border: '1px solid rgba(255,255,255,0.06)',
-        boxShadow: '0 24px 64px rgba(0,0,0,0.5)', position: 'relative', zIndex: 1,
-    };
-
-    const msgBg = message?.type === 'success' ? 'rgba(16,185,129,0.08)' : message?.type === 'error' ? 'rgba(244,63,94,0.08)' : 'rgba(59,130,246,0.08)';
-    const msgBorder = message?.type === 'success' ? 'rgba(16,185,129,0.2)' : message?.type === 'error' ? 'rgba(244,63,94,0.2)' : 'rgba(59,130,246,0.2)';
-    const msgColor = message?.type === 'success' ? '#34d399' : message?.type === 'error' ? '#fb7185' : '#93c5fd';
-
-    // ============================================================
-    // DONE step
-    // ============================================================
-    if (mainStep === 'done') {
+    // ====== INTRO ======
+    if (mainStep === 'intro') {
         return (
             <div style={pageStyle}>
-                <div style={{ position: 'absolute', width: 250, height: 250, borderRadius: '50%', background: 'radial-gradient(circle, rgba(16,185,129,0.12), transparent 70%)', top: '10%', left: '-5%' }} />
-                <div style={{ ...cardStyle, padding: '36px 24px', textAlign: 'center' }}>
-                    <div style={{ width: 72, height: 72, borderRadius: '50%', background: 'linear-gradient(135deg, #10b981, #059669)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 18px', boxShadow: '0 12px 40px rgba(16,185,129,0.4)' }}>
-                        <CheckCircle size={34} color="white" strokeWidth={2} />
-                    </div>
-                    <h2 style={{ fontSize: 20, fontWeight: 900, color: '#f8fafc', marginBottom: 8 }}>تم التسجيل بنجاح! 🎉</h2>
-                    <p style={{ fontSize: 13, color: 'rgba(248,250,252,0.5)', lineHeight: 1.9, marginBottom: 24 }}>
-                        تم تسجيل بصمة وجهك من <strong style={{ color: '#34d399' }}>3 زوايا</strong> مختلفة<br />
-                        يتم حفظ بيانات التعرف كـ <strong style={{ color: '#60a5fa' }}>embeddings مشفّرة فقط</strong> — بدون صور<br />
-                        <span style={{ fontSize: 11, color: 'rgba(248,250,252,0.3)' }}>لا يمكن استرجاع وجهك من البيانات المخزنة</span>
-                    </p>
+                <div style={{ position: 'absolute', width: 300, height: 300, borderRadius: '50%', background: 'radial-gradient(circle, rgba(99,102,241,0.08), transparent 70%)', top: '-5%', left: '-10%' }} />
+                <div style={{ position: 'absolute', width: 200, height: 200, borderRadius: '50%', background: 'radial-gradient(circle, rgba(236,72,153,0.06), transparent 70%)', bottom: '5%', right: '-5%' }} />
 
-                    {/* Steps summary */}
-                    <div style={{ display: 'flex', gap: 8, marginBottom: 24 }}>
-                        {ANGLE_STEPS.map(s => (
+                <div style={{ ...cardStyle, padding: '28px 20px' }}>
+                    {/* Logo area */}
+                    <div style={{ textAlign: 'center', marginBottom: 20 }}>
+                        <div style={{
+                            width: 72, height: 72, borderRadius: 20, margin: '0 auto 14px',
+                            background: 'linear-gradient(135deg, #6366f1, #8b5cf6, #ec4899)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            boxShadow: '0 12px 40px rgba(99,102,241,0.4)',
+                            animation: 'introFloat 3s ease-in-out infinite',
+                        }}>
+                            <ScanFace size={34} color="white" strokeWidth={1.8} />
+                        </div>
+                        <h1 style={{ fontSize: 20, fontWeight: 900, color: '#f8fafc', marginBottom: 6, fontFamily: 'var(--font-arabic)' }}>
+                            تسجيل الوجه البيومتري
+                        </h1>
+                        <p style={{ fontSize: 12.5, color: 'rgba(248,250,252,0.45)', lineHeight: 1.7, maxWidth: 280, margin: '0 auto' }}>
+                            سنلتقط وجهك من 5 اتجاهات مختلفة لبناء نموذج آمن ودقيق
+                        </p>
+                    </div>
+
+                    {/* Security badge */}
+                    <div style={{
+                        display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px', borderRadius: 12,
+                        background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.12)', marginBottom: 18,
+                    }}>
+                        <Shield size={16} color="#34d399" />
+                        <div>
+                            <span style={{ fontSize: 11.5, fontWeight: 700, color: '#34d399' }}>تخزين آمن — بصمات رقمية فقط</span>
+                            <br />
+                            <span style={{ fontSize: 10, color: 'rgba(248,250,252,0.25)' }}>لا يتم تخزين أي صور — فقط embeddings مشفّرة</span>
+                        </div>
+                    </div>
+
+                    {/* Direction cards */}
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 6, marginBottom: 22 }}>
+                        {DIRECTION_STEPS.map((s, i) => (
                             <div key={s.angle} style={{
-                                flex: 1, padding: '12px 8px', textAlign: 'center', borderRadius: 14,
-                                background: 'rgba(16,185,129,0.08)',
-                                border: '1px solid rgba(16,185,129,0.25)',
+                                padding: '10px 4px', textAlign: 'center', borderRadius: 12,
+                                background: completedAngles.has(s.angle) ? 'rgba(16,185,129,0.06)' : 'rgba(255,255,255,0.02)',
+                                border: `1px solid ${completedAngles.has(s.angle) ? 'rgba(16,185,129,0.2)' : 'rgba(255,255,255,0.04)'}`,
+                                transition: 'all 0.3s ease',
                             }}>
-                                <div style={{ fontSize: 20, marginBottom: 4 }}>✅</div>
-                                <div style={{ fontSize: 11, fontWeight: 700, color: '#34d399' }}>{s.label}</div>
+                                <div style={{ fontSize: 18, marginBottom: 4 }}>
+                                    {completedAngles.has(s.angle) ? '✅' : s.icon}
+                                </div>
+                                <div style={{ fontSize: 9, fontWeight: 800, color: completedAngles.has(s.angle) ? '#34d399' : 'rgba(255,255,255,0.4)' }}>
+                                    {s.label}
+                                </div>
                             </div>
                         ))}
                     </div>
 
-                    <button onClick={handleDone} style={{
-                        width: '100%', padding: '16px', borderRadius: 14,
-                        background: 'linear-gradient(135deg, #10b981, #059669)',
-                        border: 'none', color: 'white', fontSize: 15, fontWeight: 800,
-                        cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
-                        fontFamily: 'var(--font-arabic)', boxShadow: '0 8px 30px rgba(16,185,129,0.35)',
-                    }}>
-                        <ArrowRight size={20} strokeWidth={2} />
-                        متابعة إلى التطبيق
+                    {/* Start button */}
+                    <button
+                        onClick={() => setMainStep('face_capture')}
+                        style={{
+                            width: '100%', padding: '16px', borderRadius: 16,
+                            background: 'linear-gradient(135deg, #6366f1, #8b5cf6, #a78bfa)',
+                            border: 'none', color: 'white', fontSize: 15, fontWeight: 900,
+                            cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
+                            fontFamily: 'var(--font-arabic)', boxShadow: '0 10px 35px rgba(99,102,241,0.4)',
+                            transition: 'transform 0.2s ease, box-shadow 0.2s ease',
+                        }}
+                        onMouseEnter={e => { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 14px 40px rgba(99,102,241,0.5)'; }}
+                        onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = '0 10px 35px rgba(99,102,241,0.4)'; }}
+                    >
+                        <ScanFace size={20} strokeWidth={2} />
+                        {completedAngles.size > 0 ? 'متابعة التسجيل' : 'بدء التسجيل'}
+                        <ChevronRight size={18} />
                     </button>
                 </div>
+
+                <style>{`
+                    @keyframes introFloat {
+                        0%, 100% { transform: translateY(0) rotate(0deg); }
+                        50% { transform: translateY(-8px) rotate(2deg); }
+                    }
+                `}</style>
             </div>
         );
     }
 
-    // ============================================================
-    // INTRO step
-    // ============================================================
-    if (mainStep === 'intro') {
+    // ====== DONE ======
+    if (mainStep === 'done') {
         return (
             <div style={pageStyle}>
-                <div style={{ position: 'absolute', width: 300, height: 300, borderRadius: '50%', background: 'radial-gradient(circle, rgba(99,102,241,0.1), transparent 70%)', top: '5%', left: '-10%' }} />
-                <div style={{ position: 'absolute', width: 220, height: 220, borderRadius: '50%', background: 'radial-gradient(circle, rgba(16,185,129,0.06), transparent 70%)', bottom: '10%', right: '-5%' }} />
-
                 <div style={{ ...cardStyle, padding: '30px 22px', textAlign: 'center' }}>
-                    {/* Header */}
-                    <div style={{ marginBottom: 18 }}>
-                        <div style={{ width: 70, height: 70, borderRadius: '50%', background: 'linear-gradient(135deg, #3b82f6, #6366f1)', display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 16px', position: 'relative', boxShadow: '0 12px 40px rgba(99,102,241,0.35)' }}>
-                            <ScanFace size={32} color="white" strokeWidth={1.6} />
-                        </div>
-                        <h1 style={{ fontSize: 22, fontWeight: 900, color: '#f8fafc', marginBottom: 6, letterSpacing: -0.5 }}>
-                            تسجيل بصمة الوجه
-                        </h1>
-                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 5, marginBottom: 4 }}>
-                            <Shield size={13} color="rgba(248,250,252,0.3)" />
-                            <span style={{ fontSize: 11, color: 'rgba(248,250,252,0.3)', fontWeight: 600 }}>نظام تحقق بيومتري آمن</span>
-                        </div>
+                    <div style={{
+                        width: 80, height: 80, borderRadius: '50%', margin: '0 auto 18px',
+                        background: 'linear-gradient(135deg, #10b981, #059669)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        boxShadow: '0 12px 40px rgba(16,185,129,0.4)',
+                        animation: 'donePulse 2s ease-in-out infinite',
+                    }}>
+                        <CheckCircle size={38} color="white" strokeWidth={2} />
                     </div>
-
-                    <p style={{ fontSize: 12.5, color: 'rgba(248,250,252,0.45)', lineHeight: 2, marginBottom: 22 }}>
-                        سيتم تصوير وجهك من <strong style={{ color: '#60a5fa' }}>3 زوايا مختلفة</strong> لتسجيل بصمة دقيقة<br />
-                        يتم حفظ <strong style={{ color: '#a78bfa' }}>embeddings رقمية فقط</strong> — بدون صور وجه<br />
-                        <span style={{ fontSize: 11, color: 'rgba(248,250,252,0.3)' }}>البيانات مشفّرة ولا يمكن استرجاع الوجه منها</span>
+                    <h2 style={{ fontSize: 20, fontWeight: 900, color: '#f8fafc', marginBottom: 8 }}>
+                        تم التسجيل بنجاح! 🎉
+                    </h2>
+                    <p style={{ fontSize: 13, color: 'rgba(248,250,252,0.4)', marginBottom: 20, lineHeight: 1.8 }}>
+                        تم تسجيل جميع الاتجاهات الخمسة بنجاح
+                        <br />
+                        يمكنك الآن استخدام وجهك لتسجيل الحضور
                     </p>
 
-                    {/* Steps preview */}
-                    <div style={{ display: 'flex', gap: 8, marginBottom: 26 }}>
-                        {ANGLE_STEPS.map((s, i) => (
+                    {/* Completed directions summary */}
+                    <div style={{ display: 'flex', gap: 6, marginBottom: 22, justifyContent: 'center', flexWrap: 'wrap' }}>
+                        {DIRECTION_STEPS.map(s => (
                             <div key={s.angle} style={{
-                                flex: 1, padding: '14px 8px', textAlign: 'center', borderRadius: 14,
-                                background: completedAngles.has(s.angle) ? 'rgba(16,185,129,0.08)' : 'rgba(255,255,255,0.03)',
-                                border: `1px solid ${completedAngles.has(s.angle) ? 'rgba(16,185,129,0.25)' : 'rgba(255,255,255,0.06)'}`,
+                                padding: '6px 12px', borderRadius: 20,
+                                background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.15)',
+                                fontSize: 10, fontWeight: 700, color: '#34d399',
+                                display: 'flex', alignItems: 'center', gap: 4,
                             }}>
-                                <div style={{ fontSize: 22, marginBottom: 6 }}>
-                                    {completedAngles.has(s.angle) ? '✅' : s.icon}
-                                </div>
-                                <div style={{ fontSize: 11, fontWeight: 700, color: completedAngles.has(s.angle) ? '#34d399' : '#94a3b8' }}>
-                                    {s.label}
-                                </div>
-                                <div style={{ fontSize: 9, marginTop: 4, color: completedAngles.has(s.angle) ? '#34d399' : 'rgba(255,255,255,0.25)', fontWeight: 600 }}>
-                                    {completedAngles.has(s.angle) ? '✓ مكتمل' : `خطوة ${i + 1}`}
-                                </div>
+                                ✓ {s.label}
                             </div>
                         ))}
                     </div>
 
                     <button
-                        onClick={() => setMainStep('face_capture')}
+                        onClick={handleDone}
                         style={{
-                            width: '100%', padding: '16px', borderRadius: 14,
-                            background: 'linear-gradient(135deg, #3b82f6, #6366f1, #8b5cf6)',
-                            border: 'none', color: 'white', fontSize: 15, fontWeight: 800,
+                            width: '100%', padding: '16px', borderRadius: 16,
+                            background: 'linear-gradient(135deg, #10b981, #059669)',
+                            border: 'none', color: 'white', fontSize: 15, fontWeight: 900,
                             cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
-                            fontFamily: 'var(--font-arabic)', boxShadow: '0 8px 30px rgba(99,102,241,0.35)',
+                            fontFamily: 'var(--font-arabic)', boxShadow: '0 10px 35px rgba(16,185,129,0.4)',
                         }}
                     >
-                        <ScanFace size={20} strokeWidth={2} />
-                        {completedAngles.size > 0 ? 'متابعة التسجيل' : 'بدء التسجيل البيومتري'}
+                        <ArrowRight size={20} />
+                        متابعة
                     </button>
                 </div>
+                <style>{`
+                    @keyframes donePulse {
+                        0%, 100% { box-shadow: 0 12px 40px rgba(16,185,129,0.4); }
+                        50% { box-shadow: 0 16px 50px rgba(16,185,129,0.6); }
+                    }
+                `}</style>
             </div>
         );
     }
 
-    // ============================================================
-    // FACE CAPTURE step (3 angles)
-    // ============================================================
-    const angleStep = ANGLE_STEPS[currentAngleIdx];
+    // ====== FACE CAPTURE ======
+    const step = DIRECTION_STEPS[currentIdx];
+    const completedCount = completedAngles.size;
+    const totalSteps = DIRECTION_STEPS.length;
 
     return (
         <div style={pageStyle}>
-            <div style={{ position: 'absolute', width: 260, height: 260, borderRadius: '50%', background: `radial-gradient(circle, ${angleStep.glow.replace('0.35', '0.1')}, transparent 70%)`, top: '5%', right: '-5%' }} />
+            {/* Ambient glow */}
+            <div style={{
+                position: 'absolute', width: 280, height: 280, borderRadius: '50%',
+                background: `radial-gradient(circle, ${step.glow.replace('0.4', '0.08')}, transparent 70%)`,
+                top: '3%', right: '-8%', transition: 'background 0.5s ease',
+            }} />
 
-            <div style={{ ...cardStyle, padding: '22px 18px' }}>
-                {/* Step indicator */}
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6, marginBottom: 18 }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '5px 14px', borderRadius: 20, background: 'rgba(255,255,255,0.04)', border: '1px solid rgba(255,255,255,0.06)' }}>
-                        {ANGLE_STEPS.map((s, i) => (
-                            <React.Fragment key={s.angle}>
-                                <div style={{
-                                    width: 18, height: 18, borderRadius: '50%',
-                                    background: completedAngles.has(s.angle) ? '#10b981' : i === currentAngleIdx ? angleStep.gradient : 'rgba(255,255,255,0.08)',
-                                    display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                    fontSize: 9, color: 'white', fontWeight: 800,
-                                }}>
-                                    {completedAngles.has(s.angle) ? '✓' : i + 1}
-                                </div>
-                                {i < ANGLE_STEPS.length - 1 && (
-                                    <div style={{ width: 14, height: 2, borderRadius: 1, background: completedAngles.has(ANGLE_STEPS[i + 1]?.angle) || completedAngles.has(s.angle) ? '#10b981' : 'rgba(255,255,255,0.08)' }} />
-                                )}
-                            </React.Fragment>
-                        ))}
+            <div style={{ ...cardStyle, padding: '20px 16px' }}>
+                {/* Progress bar at top */}
+                <div style={{ marginBottom: 16 }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+                        <span style={{ fontSize: 11, fontWeight: 700, color: 'rgba(255,255,255,0.4)' }}>
+                            {completedCount}/{totalSteps} مكتمل
+                        </span>
+                        <span style={{ fontSize: 11, fontWeight: 800, color: step.color }}>
+                            {step.label}
+                        </span>
+                    </div>
+                    <div style={{ height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.06)', overflow: 'hidden' }}>
+                        <div style={{
+                            height: '100%', borderRadius: 2, background: step.gradient,
+                            width: `${(completedCount / totalSteps) * 100}%`,
+                            transition: 'width 0.5s ease',
+                        }} />
                     </div>
                 </div>
 
-                {/* Title */}
-                <div style={{ textAlign: 'center', marginBottom: 14 }}>
-                    <div style={{ width: 48, height: 48, borderRadius: '50%', background: angleStep.gradient, display: 'flex', alignItems: 'center', justifyContent: 'center', margin: '0 auto 10px', boxShadow: `0 8px 28px ${angleStep.glow}`, fontSize: 22 }}>
-                        {angleStep.icon}
-                    </div>
-                    <h2 style={{ fontSize: 17, fontWeight: 900, color: '#f8fafc', marginBottom: 4 }}>{angleStep.instruction}</h2>
-                    <p style={{ fontSize: 11.5, color: 'rgba(248,250,252,0.4)' }}>{angleStep.hint}</p>
+                {/* Step pills */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4, marginBottom: 14 }}>
+                    {DIRECTION_STEPS.map((s, i) => (
+                        <div key={s.angle} style={{
+                            width: completedAngles.has(s.angle) ? 22 : i === currentIdx ? 28 : 18,
+                            height: 22,
+                            borderRadius: 11,
+                            background: completedAngles.has(s.angle) ? '#10b981' : i === currentIdx ? step.gradient : 'rgba(255,255,255,0.06)',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            fontSize: 9, color: 'white', fontWeight: 900,
+                            transition: 'all 0.3s ease',
+                            boxShadow: i === currentIdx ? `0 4px 16px ${step.glow}` : 'none',
+                        }}>
+                            {completedAngles.has(s.angle) ? '✓' : i === currentIdx ? s.icon : ''}
+                        </div>
+                    ))}
                 </div>
 
-                {/* Camera viewfinder */}
-                <div style={{ position: 'relative', width: '100%', aspectRatio: '4/3', borderRadius: 16, overflow: 'hidden', background: '#000', marginBottom: 14, border: `2px solid ${cameraReady ? angleStep.glow.replace('0.35', '0.5') : 'rgba(255,255,255,0.06)'}`, boxShadow: cameraReady ? `0 0 40px ${angleStep.glow}` : 'none', transition: 'all 0.5s ease' }}>
-                    <video ref={videoRef} autoPlay playsInline muted style={{ width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)' }} />
+                {/* Direction instruction */}
+                <div style={{ textAlign: 'center', marginBottom: 12 }}>
+                    <div style={{
+                        width: 42, height: 42, borderRadius: 14, margin: '0 auto 8px',
+                        background: step.gradient, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        boxShadow: `0 8px 24px ${step.glow}`, fontSize: 20,
+                        animation: recording ? 'dirPulse 1s ease-in-out infinite' : 'none',
+                    }}>
+                        {step.icon}
+                    </div>
+                    <h2 style={{ fontSize: 16, fontWeight: 900, color: '#f8fafc', marginBottom: 3 }}>
+                        {step.instruction}
+                    </h2>
+                    <p style={{ fontSize: 10.5, color: 'rgba(248,250,252,0.35)' }}>
+                        فيديو 3 ثوانٍ — حرّك رأسك ببطء في هذا الاتجاه
+                    </p>
+                </div>
 
+                {/* Camera viewfinder — circular */}
+                <div style={{
+                    position: 'relative', width: '100%', maxWidth: 280, aspectRatio: '1/1',
+                    borderRadius: '50%', overflow: 'hidden', margin: '0 auto 14px',
+                    background: '#000',
+                    border: `3px solid ${cameraReady ? step.color : 'rgba(255,255,255,0.06)'}`,
+                    boxShadow: cameraReady ? `0 0 40px ${step.glow}, inset 0 0 40px rgba(0,0,0,0.3)` : 'none',
+                    transition: 'all 0.5s ease',
+                }}>
+                    <video ref={videoRef} autoPlay playsInline muted style={{
+                        width: '100%', height: '100%', objectFit: 'cover', transform: 'scaleX(-1)',
+                    }} />
+
+                    {/* Scanning rings */}
                     {cameraReady && !loading && (
                         <>
-                            {['top-right', 'top-left', 'bottom-right', 'bottom-left'].map(pos => (
-                                <div key={pos} style={{ position: 'absolute', [pos.includes('top') ? 'top' : 'bottom']: 12, [pos.includes('right') ? 'right' : 'left']: 12, width: 22, height: 22, borderTop: pos.includes('top') ? `2px solid ${angleStep.glow.replace('0.35', '0.7')}` : 'none', borderBottom: pos.includes('bottom') ? `2px solid ${angleStep.glow.replace('0.35', '0.7')}` : 'none', borderRight: pos.includes('right') ? `2px solid ${angleStep.glow.replace('0.35', '0.7')}` : 'none', borderLeft: pos.includes('left') ? `2px solid ${angleStep.glow.replace('0.35', '0.7')}` : 'none', opacity: 0.7, borderRadius: 3 }} />
-                            ))}
+                            <div style={{
+                                position: 'absolute', inset: 6, borderRadius: '50%',
+                                border: `1.5px dashed ${step.color}44`,
+                                animation: 'scanRotate 8s linear infinite',
+                            }} />
+                            <div style={{
+                                position: 'absolute', inset: 16, borderRadius: '50%',
+                                border: `1px dashed ${step.color}22`,
+                                animation: 'scanRotate 12s linear infinite reverse',
+                            }} />
                         </>
+                    )}
+
+                    {/* Direction arrow overlay */}
+                    {cameraReady && !loading && !recording && countdown === 0 && (
+                        <div style={{
+                            position: 'absolute', inset: 0,
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            pointerEvents: 'none',
+                        }}>
+                            <div style={{
+                                fontSize: 42, opacity: 0.25,
+                                animation: `dirBounce_${step.angle} 1.5s ease-in-out infinite`,
+                            }}>
+                                {step.angle === 'right' ? '→' : step.angle === 'left' ? '←' : step.angle === 'up' ? '↑' : step.angle === 'down' ? '↓' : '⊙'}
+                            </div>
+                        </div>
                     )}
 
                     {/* Countdown overlay */}
                     {countdown > 0 && (
-                        <div style={{ position: 'absolute', inset: 0, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(2px)' }}>
-                            <div style={{ width: 80, height: 80, borderRadius: '50%', background: angleStep.gradient, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 36, fontWeight: 900, color: 'white', boxShadow: `0 8px 30px ${angleStep.glow}` }}>
+                        <div style={{
+                            position: 'absolute', inset: 0,
+                            display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            background: 'rgba(0,0,0,0.5)', backdropFilter: 'blur(2px)',
+                        }}>
+                            <div style={{
+                                width: 70, height: 70, borderRadius: '50%',
+                                background: step.gradient,
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                fontSize: 32, fontWeight: 900, color: 'white',
+                                boxShadow: `0 8px 30px ${step.glow}`,
+                                animation: 'countPop 1s ease-in-out',
+                            }}>
                                 {countdown}
                             </div>
                         </div>
                     )}
 
-                    {loading && (
-                        <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.55)', backdropFilter: 'blur(3px)' }}>
-                            {/* Recording indicator */}
-                            <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
-                                <div style={{ width: 12, height: 12, borderRadius: '50%', background: '#f43f5e', animation: 'fvPulse 1s infinite', boxShadow: '0 0 12px rgba(244,63,94,0.6)' }} />
-                                <span style={{ fontSize: 14, fontWeight: 800, color: '#f43f5e' }}>REC</span>
+                    {/* Recording overlay */}
+                    {recording && (
+                        <div style={{
+                            position: 'absolute', inset: 0,
+                            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                            background: 'rgba(0,0,0,0.45)', backdropFilter: 'blur(2px)',
+                        }}>
+                            {/* REC indicator */}
+                            <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 10 }}>
+                                <div style={{
+                                    width: 10, height: 10, borderRadius: '50%', background: '#f43f5e',
+                                    animation: 'recBlink 1s infinite', boxShadow: '0 0 10px rgba(244,63,94,0.6)',
+                                }} />
+                                <span style={{ fontSize: 12, fontWeight: 900, color: '#f43f5e', letterSpacing: 2 }}>REC</span>
                             </div>
-                            <div style={{ color: 'white', fontSize: 13, fontWeight: 700, marginBottom: 10 }}>{progressText}</div>
-                            <div style={{ width: '70%', height: 5, borderRadius: 3, background: 'rgba(255,255,255,0.1)', overflow: 'hidden' }}>
-                                <div style={{ width: `${progress}%`, height: '100%', borderRadius: 3, background: angleStep.gradient, transition: 'width 0.25s ease' }} />
+                            <div style={{ color: 'white', fontSize: 12, fontWeight: 700, marginBottom: 8 }}>{progressText}</div>
+                            {/* Circular progress */}
+                            <div style={{ width: '70%', height: 4, borderRadius: 2, background: 'rgba(255,255,255,0.1)', overflow: 'hidden' }}>
+                                <div style={{
+                                    width: `${progress}%`, height: '100%', borderRadius: 2,
+                                    background: step.gradient, transition: 'width 0.2s ease',
+                                }} />
                             </div>
-                            <div style={{ fontSize: 10, color: 'rgba(255,255,255,0.4)', marginTop: 8, fontWeight: 600 }}>ارمش وتحرّك بشكل طبيعي</div>
                         </div>
                     )}
 
                     {/* Camera not started */}
                     {!cameraReady && !loading && (
-                        <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', background: 'rgba(0,0,0,0.85)', gap: 14 }}>
-                            <div style={{ width: 56, height: 56, borderRadius: '50%', background: 'rgba(255,255,255,0.06)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                                <Camera size={24} color="rgba(255,255,255,0.4)" />
+                        <div style={{
+                            position: 'absolute', inset: 0,
+                            display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
+                            background: 'rgba(0,0,0,0.9)', gap: 12,
+                        }}>
+                            <div style={{
+                                width: 50, height: 50, borderRadius: '50%',
+                                background: 'rgba(255,255,255,0.04)',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                            }}>
+                                <Camera size={22} color="rgba(255,255,255,0.3)" />
                             </div>
-                            <button onClick={openCamera} style={{ padding: '12px 28px', borderRadius: 12, background: angleStep.gradient, border: 'none', color: 'white', fontSize: 13, fontWeight: 700, cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 8, fontFamily: 'var(--font-arabic)', boxShadow: `0 6px 25px ${angleStep.glow}` }}>
-                                <Camera size={16} /> تشغيل الكاميرا
+                            <button onClick={openCamera} style={{
+                                padding: '10px 24px', borderRadius: 12, background: step.gradient,
+                                border: 'none', color: 'white', fontSize: 12, fontWeight: 700,
+                                cursor: 'pointer', fontFamily: 'var(--font-arabic)',
+                                boxShadow: `0 6px 20px ${step.glow}`,
+                            }}>
+                                <Camera size={14} style={{ marginLeft: 6, verticalAlign: 'middle' }} />
+                                تشغيل الكاميرا
                             </button>
                         </div>
                     )}
@@ -430,8 +548,13 @@ export default function BiometricRegistrationPage({ onComplete }: Props) {
 
                 {/* Message */}
                 {message && (
-                    <div style={{ padding: '10px 14px', borderRadius: 12, background: msgBg, border: `1px solid ${msgBorder}`, color: msgColor, fontSize: 12.5, fontWeight: 700, textAlign: 'center', marginBottom: 12, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 7 }}>
-                        {message.type === 'success' && <CheckCircle size={15} />}
+                    <div style={{
+                        padding: '10px 14px', borderRadius: 12, background: msgBg,
+                        border: `1px solid ${msgBorder}`, color: msgColor,
+                        fontSize: 12, fontWeight: 700, textAlign: 'center', marginBottom: 12,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 6,
+                    }}>
+                        {message.type === 'success' && <CheckCircle size={14} />}
                         {message.text}
                     </div>
                 )}
@@ -441,56 +564,119 @@ export default function BiometricRegistrationPage({ onComplete }: Props) {
                     <button
                         onClick={startCaptureCountdown}
                         style={{
-                            width: '100%', padding: '15px', borderRadius: 14,
-                            background: angleStep.gradient, border: 'none', color: 'white',
-                            fontSize: 15, fontWeight: 800, cursor: 'pointer',
-                            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
-                            fontFamily: 'var(--font-arabic)', boxShadow: `0 8px 28px ${angleStep.glow}`,
+                            width: '100%', padding: '14px', borderRadius: 14,
+                            background: step.gradient, border: 'none', color: 'white',
+                            fontSize: 14, fontWeight: 900, cursor: 'pointer',
+                            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 8,
+                            fontFamily: 'var(--font-arabic)', boxShadow: `0 8px 28px ${step.glow}`,
+                            transition: 'transform 0.2s ease',
                         }}
+                        onMouseEnter={e => { e.currentTarget.style.transform = 'scale(1.02)'; }}
+                        onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; }}
                     >
-                        <ScanFace size={18} strokeWidth={2} />
-                        🔴 تسجيل فيديو — {angleStep.label} (3 ثوانٍ)
+                        🔴 تسجيل — {step.instruction} (3 ثوانٍ)
                     </button>
                 )}
 
-                {/* Completed angles summary at bottom */}
+                {/* Completed direction chips */}
                 {completedAngles.size > 0 && (
-                    <div style={{ display: 'flex', gap: 6, marginTop: 12 }}>
-                        {ANGLE_STEPS.map(s => completedAngles.has(s.angle) ? (
-                            <div key={s.angle} style={{ flex: 1, padding: '6px', textAlign: 'center', borderRadius: 8, background: 'rgba(16,185,129,0.08)', border: '1px solid rgba(16,185,129,0.2)' }}>
-                                <span style={{ fontSize: 10, color: '#34d399', fontWeight: 700 }}>✓ {s.label}</span>
+                    <div style={{ display: 'flex', gap: 4, marginTop: 12, flexWrap: 'wrap', justifyContent: 'center' }}>
+                        {DIRECTION_STEPS.map(s => completedAngles.has(s.angle) ? (
+                            <div key={s.angle} style={{
+                                padding: '4px 10px', borderRadius: 16,
+                                background: 'rgba(16,185,129,0.06)', border: '1px solid rgba(16,185,129,0.15)',
+                                fontSize: 9, color: '#34d399', fontWeight: 700,
+                            }}>
+                                ✓ {s.label}
                             </div>
                         ) : null)}
                     </div>
                 )}
 
-                {/* Reset option */}
+                {/* Reset */}
                 {completedAngles.size > 0 && !loading && (
                     <button
                         onClick={() => {
                             setCompletedAngles(new Set());
-                            setCurrentAngleIdx(0);
+                            setCurrentIdx(0);
                             setMessage(null);
                         }}
                         style={{
-                            marginTop: 10, padding: '8px 16px', borderRadius: 10,
-                            background: 'transparent', border: '1px solid rgba(255,255,255,0.06)',
-                            color: 'rgba(255,255,255,0.4)', fontSize: 11, fontWeight: 600,
-                            cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 6,
+                            marginTop: 10, padding: '7px 14px', borderRadius: 10,
+                            background: 'transparent', border: '1px solid rgba(255,255,255,0.05)',
+                            color: 'rgba(255,255,255,0.3)', fontSize: 10, fontWeight: 600,
+                            cursor: 'pointer', display: 'flex', alignItems: 'center', gap: 5,
                             fontFamily: 'var(--font-arabic)', width: 'auto', margin: '10px auto 0',
                         }}
                     >
-                        <RotateCcw size={12} /> إعادة التسجيل
+                        <RotateCcw size={11} /> إعادة التسجيل
                     </button>
                 )}
             </div>
+
             <style>{`
-                @keyframes spin { to { transform: rotate(360deg); } }
-                @keyframes fvPulse {
-                    0%, 100% { transform: scale(1); opacity: 1; }
-                    50% { transform: scale(1.4); opacity: 0.5; }
+                @keyframes scanRotate { to { transform: rotate(360deg); } }
+                @keyframes recBlink {
+                    0%, 100% { opacity: 1; transform: scale(1); }
+                    50% { opacity: 0.3; transform: scale(1.3); }
+                }
+                @keyframes dirPulse {
+                    0%, 100% { transform: scale(1); box-shadow: 0 8px 24px ${step.glow}; }
+                    50% { transform: scale(1.1); box-shadow: 0 12px 32px ${step.glow.replace('0.4', '0.6')}; }
+                }
+                @keyframes countPop {
+                    0% { transform: scale(0.5); opacity: 0; }
+                    50% { transform: scale(1.15); }
+                    100% { transform: scale(1); opacity: 1; }
+                }
+                @keyframes dirBounce_right {
+                    0%, 100% { transform: translateX(0); }
+                    50% { transform: translateX(12px); }
+                }
+                @keyframes dirBounce_left {
+                    0%, 100% { transform: translateX(0); }
+                    50% { transform: translateX(-12px); }
+                }
+                @keyframes dirBounce_up {
+                    0%, 100% { transform: translateY(0); }
+                    50% { transform: translateY(-12px); }
+                }
+                @keyframes dirBounce_down {
+                    0%, 100% { transform: translateY(0); }
+                    50% { transform: translateY(12px); }
+                }
+                @keyframes dirBounce_front {
+                    0%, 100% { transform: scale(1); opacity: 0.2; }
+                    50% { transform: scale(1.2); opacity: 0.35; }
                 }
             `}</style>
         </div>
     );
 }
+
+// Shared styles
+const pageStyle: React.CSSProperties = {
+    minHeight: '100dvh',
+    background: 'linear-gradient(135deg, #0a0a1a 0%, #111827 50%, #0f172a 100%)',
+    display: 'flex',
+    flexDirection: 'column',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: '20px 16px',
+    position: 'relative',
+    overflow: 'hidden',
+    fontFamily: 'var(--font-arabic)',
+    direction: 'rtl',
+};
+
+const cardStyle: React.CSSProperties = {
+    width: '100%',
+    maxWidth: 380,
+    borderRadius: 24,
+    background: 'rgba(255,255,255,0.03)',
+    backdropFilter: 'blur(20px)',
+    border: '1px solid rgba(255,255,255,0.06)',
+    boxShadow: '0 20px 60px rgba(0,0,0,0.4)',
+    position: 'relative',
+    zIndex: 2,
+};

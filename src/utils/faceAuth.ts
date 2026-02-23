@@ -161,20 +161,107 @@ export function drawFaceOverlay(
 }
 
 // ============================================================
-// Liveness State Tracker — tracks events across verification loop
+// Anti-Spoofing Challenge System
+// ============================================================
+
+export type ChallengeDirection = 'right' | 'left' | 'up' | 'down';
+
+export interface ChallengeStep {
+    direction: ChallengeDirection;
+    label: string;
+    icon: string;
+    completed: boolean;
+    startedAt?: number;
+}
+
+const DIRECTION_LABELS: Record<ChallengeDirection, { label: string; icon: string }> = {
+    right: { label: 'لف رأسك لليمين', icon: '→' },
+    left: { label: 'لف رأسك لليسار', icon: '←' },
+    up: { label: 'ارفع رأسك لفوق', icon: '↑' },
+    down: { label: 'نزّل رأسك لجوه', icon: '↓' },
+};
+
+export function generateRandomChallenge(stepCount: number = 3): ChallengeStep[] {
+    const directions: ChallengeDirection[] = ['right', 'left', 'up', 'down'];
+    const shuffled = [...directions].sort(() => Math.random() - 0.5);
+    const selected = shuffled.slice(0, stepCount);
+    return selected.map(dir => ({
+        direction: dir,
+        label: DIRECTION_LABELS[dir].label,
+        icon: DIRECTION_LABELS[dir].icon,
+        completed: false,
+    }));
+}
+
+// ============================================================
+// Session Nonce — prevents replay attacks
+// ============================================================
+
+export interface VerificationSession {
+    nonce: string;
+    createdAt: number;
+    expiresAt: number;
+    used: boolean;
+}
+
+const activeSessions = new Map<string, VerificationSession>();
+
+export function createVerificationSession(): VerificationSession {
+    const nonce = `${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+    const session: VerificationSession = {
+        nonce,
+        createdAt: Date.now(),
+        expiresAt: Date.now() + 20_000, // 20 seconds
+        used: false,
+    };
+    activeSessions.set(nonce, session);
+    // Auto-cleanup expired sessions
+    setTimeout(() => activeSessions.delete(nonce), 25_000);
+    return session;
+}
+
+export function validateSession(nonce: string): boolean {
+    const session = activeSessions.get(nonce);
+    if (!session) return false;
+    if (session.used) return false;
+    if (Date.now() > session.expiresAt) {
+        activeSessions.delete(nonce);
+        return false;
+    }
+    session.used = true;
+    return true;
+}
+
+// ============================================================
+// Liveness State Tracker — with Anti-Spoofing
 // ============================================================
 
 export interface LivenessTracker {
     frames: FaceScanFrame[];
     earHistory: number[];        // Eye Aspect Ratio history for blink detection
     blinkCount: number;
-    headYawHistory: number[];    // Horizontal head angle history
+    headYawHistory: number[];    // Horizontal head yaw history
+    headPitchHistory: number[];  // Vertical head pitch history
     headTurnDetected: boolean;
     textureScores: number[];     // Pixel variance scores
     startTime: number;
-    earBaseline: number;         // Running average EAR for relative blink detection
-    earMin: number;              // Minimum EAR observed
-    earMax: number;              // Maximum EAR observed
+    earBaseline: number;
+    earMin: number;
+    earMax: number;
+    // Anti-spoofing challenge
+    challenge: ChallengeStep[];
+    challengeIndex: number;      // Current challenge step
+    challengeStartTime: number;  // When current step started
+    challengeCompleted: boolean; // All steps done
+    // Screen spoof detection
+    brightnessHistory: number[]; // Brightness per frame for flicker detection
+    moireScores: number[];       // High-freq artifact scores
+    spoofScore: number;          // 0-100, higher = more likely spoof
+    // Movement continuity
+    faceSizeHistory: number[];   // Track face bounding box size changes
+    positionJumps: number;       // Count of sudden position jumps
+    // Session
+    session: VerificationSession;
 }
 
 export function createLivenessTracker(): LivenessTracker {
@@ -183,12 +270,23 @@ export function createLivenessTracker(): LivenessTracker {
         earHistory: [],
         blinkCount: 0,
         headYawHistory: [],
+        headPitchHistory: [],
         headTurnDetected: false,
         textureScores: [],
         startTime: Date.now(),
         earBaseline: 0,
         earMin: 1,
         earMax: 0,
+        challenge: generateRandomChallenge(3),
+        challengeIndex: 0,
+        challengeStartTime: Date.now(),
+        challengeCompleted: false,
+        brightnessHistory: [],
+        moireScores: [],
+        spoofScore: 0,
+        faceSizeHistory: [],
+        positionJumps: 0,
+        session: createVerificationSession(),
     };
 }
 
@@ -221,76 +319,178 @@ export function computeEAR(landmarks: faceapi.FaceLandmarks68): number {
 }
 
 // ============================================================
-// Head Yaw Estimation — detects left/right head rotation
-// Uses nose (30) vs eye corners to estimate horizontal angle
+// Head Yaw & Pitch Estimation
 // ============================================================
 
-export function estimateHeadYaw(landmarks: faceapi.FaceLandmarks68): number {
+// Estimate head yaw from landmarks (horizontal head turn)
+function estimateHeadYaw(landmarks: faceapi.FaceLandmarks68): number {
     const pts = landmarks.positions;
-    // Left eye outer: 36, Right eye outer: 45, Nose tip: 30
-    const leftEye = pts[36];
-    const rightEye = pts[45];
-    const nose = pts[30];
+    const noseTip = pts[30];
+    const leftEdge = pts[0];
+    const rightEdge = pts[16];
+    const leftDist = euclideanDist2D(noseTip, leftEdge);
+    const rightDist = euclideanDist2D(noseTip, rightEdge);
+    return leftDist / (leftDist + rightDist + 1e-6);
+}
 
-    const eyeMidX = (leftEye.x + rightEye.x) / 2;
-    const eyeWidth = rightEye.x - leftEye.x;
-    // Yaw: positive = looking right, negative = looking left
-    if (eyeWidth < 1) return 0;
-    return (nose.x - eyeMidX) / eyeWidth; // Normalized -0.5 to +0.5
+// Estimate head pitch from landmarks (vertical head tilt)
+function estimateHeadPitch(landmarks: faceapi.FaceLandmarks68): number {
+    const pts = landmarks.positions;
+    const noseTip = pts[30];
+    const chin = pts[8];
+    const forehead = pts[27]; // top of nose bridge
+    const upDist = euclideanDist2D(noseTip, forehead);
+    const downDist = euclideanDist2D(noseTip, chin);
+    return upDist / (upDist + downDist + 1e-6);
 }
 
 // ============================================================
-// Texture Anti-Spoofing
-// Real faces have high pixel variance (skin texture).
-// Printed photos on screens tend to be smoother or have moiré patterns.
+// Face Texture Analysis — detect printed/screen faces
 // ============================================================
 
-export function computeFaceTextureScore(video: HTMLVideoElement, frame: FaceScanFrame): number {
+function computeFaceTextureScore(video: HTMLVideoElement, frame: FaceScanFrame): number {
     try {
-        const { box } = frame;
-        if (box.width < 20 || box.height < 20) return 50; // unknown
-
         const canvas = document.createElement('canvas');
-        const sampleSize = 64;
-        canvas.width = sampleSize;
-        canvas.height = sampleSize;
         const ctx = canvas.getContext('2d');
-        if (!ctx) return 50;
-
-        // Sample the central face region
-        const cx = box.x + box.width * 0.25;
-        const cy = box.y + box.height * 0.25;
-        const cw = box.width * 0.5;
-        const ch = box.height * 0.5;
-        ctx.drawImage(video, cx, cy, cw, ch, 0, 0, sampleSize, sampleSize);
-
-        const imgData = ctx.getImageData(0, 0, sampleSize, sampleSize).data;
-        const grayscale: number[] = [];
-        for (let i = 0; i < imgData.length; i += 4) {
-            grayscale.push(imgData[i] * 0.299 + imgData[i + 1] * 0.587 + imgData[i + 2] * 0.114);
+        if (!ctx) return 0;
+        const { x, y, width, height } = frame.box;
+        canvas.width = width;
+        canvas.height = height;
+        ctx.drawImage(video, x, y, width, height, 0, 0, width, height);
+        const imageData = ctx.getImageData(0, 0, width, height);
+        const data = imageData.data;
+        let sum = 0, sumSq = 0, count = 0;
+        for (let i = 0; i < data.length; i += 4) {
+            const gray = (data[i] + data[i + 1] + data[i + 2]) / 3;
+            sum += gray;
+            sumSq += gray * gray;
+            count++;
         }
+        if (count === 0) return 0;
+        const mean = sum / count;
+        const variance = (sumSq / count) - (mean * mean);
+        return Math.sqrt(Math.max(variance, 0));
+    } catch {
+        return 0;
+    }
+}
 
-        // Compute Laplacian variance (edge sharpness / texture richness)
-        let laplacianSum = 0;
-        const w = sampleSize;
-        for (let y = 1; y < sampleSize - 1; y++) {
-            for (let x = 1; x < w - 1; x++) {
-                const idx = y * w + x;
-                const lap = Math.abs(
-                    -grayscale[idx - w - 1] + 0 * grayscale[idx - w] - grayscale[idx - w + 1]
-                    + 0 * grayscale[idx - 1] + 4 * grayscale[idx] + 0 * grayscale[idx + 1]
-                    - grayscale[idx + w - 1] + 0 * grayscale[idx + w] - grayscale[idx + w + 1]
-                );
-                laplacianSum += lap;
+// ============================================================
+// Screen Spoof Detection — Moiré + Flicker + Color Uniformity
+// ============================================================
+
+function detectScreenSpoof(video: HTMLVideoElement, frame: FaceScanFrame): {
+    moireScore: number;
+    brightness: number;
+    colorUniformity: number;
+} {
+    try {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return { moireScore: 0, brightness: 128, colorUniformity: 0 };
+
+        const { x, y, width, height } = frame.box;
+        canvas.width = width;
+        canvas.height = height;
+        ctx.drawImage(video, x, y, width, height, 0, 0, width, height);
+        const imageData = ctx.getImageData(0, 0, width, height);
+        const data = imageData.data;
+
+        // 1. Moiré detection: high-frequency edge patterns
+        let highFreqCount = 0;
+        for (let row = 0; row < height; row++) {
+            let prevGray = 0;
+            let transitions = 0;
+            for (let col = 0; col < width; col++) {
+                const idx = (row * width + col) * 4;
+                const gray = (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
+                if (col > 0 && Math.abs(gray - prevGray) > 15) transitions++;
+                prevGray = gray;
+            }
+            if (transitions > width * 0.35) highFreqCount++;
+        }
+        const moireScore = Math.min(highFreqCount / (height * 0.5), 1);
+
+        // 2. Average brightness
+        let brightnessSum = 0;
+        const pixelCount = width * height;
+        for (let i = 0; i < data.length; i += 4) {
+            brightnessSum += (data[i] + data[i + 1] + data[i + 2]) / 3;
+        }
+        const brightness = brightnessSum / pixelCount;
+
+        // 3. Color uniformity — screens have very even backlight
+        const quadrants: number[] = [0, 0, 0, 0];
+        const quadCounts: number[] = [0, 0, 0, 0];
+        const halfW = Math.floor(width / 2);
+        const halfH = Math.floor(height / 2);
+        for (let row = 0; row < height; row++) {
+            for (let col = 0; col < width; col++) {
+                const idx = (row * width + col) * 4;
+                const gray = (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
+                const qi = (row < halfH ? 0 : 2) + (col < halfW ? 0 : 1);
+                quadrants[qi] += gray;
+                quadCounts[qi]++;
             }
         }
-        const variance = laplacianSum / ((sampleSize - 2) * (sampleSize - 2));
+        const quadAvgs = quadrants.map((s, i) => s / (quadCounts[i] || 1));
+        const maxDiff = Math.max(...quadAvgs) - Math.min(...quadAvgs);
+        const colorUniformity = 1 - Math.min(maxDiff / 20, 1);
 
-        // Real faces: variance typically 8-50+
-        // Printed/screen photos: typically < 5 (very smooth after JPEG/display compression)
-        return Math.min(variance * 3, 100); // Scale to 0-100
+        return { moireScore, brightness, colorUniformity };
     } catch {
-        return 50;
+        return { moireScore: 0, brightness: 128, colorUniformity: 0 };
+    }
+}
+
+// ============================================================
+// Movement Continuity — detect photo switching / unnatural jumps
+// ============================================================
+
+function checkMovementContinuity(tracker: LivenessTracker, frame: FaceScanFrame): {
+    isSmooth: boolean;
+    sizeJump: boolean;
+} {
+    const frames = tracker.frames;
+    if (frames.length < 2) return { isSmooth: true, sizeJump: false };
+
+    const prev = frames[frames.length - 1];
+    const prevCX = prev.box.x + prev.box.width / 2;
+    const prevCY = prev.box.y + prev.box.height / 2;
+    const currCX = frame.box.x + frame.box.width / 2;
+    const currCY = frame.box.y + frame.box.height / 2;
+
+    const dist = Math.sqrt((currCX - prevCX) ** 2 + (currCY - prevCY) ** 2);
+    const normalizedDist = dist / (frame.box.width || 1);
+    const isSmooth = normalizedDist < 0.6;
+
+    const prevSize = prev.box.width * prev.box.height;
+    const currSize = frame.box.width * frame.box.height;
+    const sizeRatio = Math.max(prevSize, currSize) / (Math.min(prevSize, currSize) || 1);
+    const sizeJump = sizeRatio > 1.35;
+
+    return { isSmooth, sizeJump };
+}
+
+// ============================================================
+// Challenge Direction Detection
+// ============================================================
+
+function detectChallengeDirection(
+    landmarks: faceapi.FaceLandmarks68,
+    requiredDir: ChallengeDirection
+): boolean {
+    const yaw = estimateHeadYaw(landmarks);
+    const pitch = estimateHeadPitch(landmarks);
+    const yawThreshold = 0.06;
+    const pitchThreshold = 0.05;
+
+    switch (requiredDir) {
+        case 'right': return yaw < (0.5 - yawThreshold);
+        case 'left': return yaw > (0.5 + yawThreshold);
+        case 'up': return pitch < (0.5 - pitchThreshold);
+        case 'down': return pitch > (0.5 + pitchThreshold);
+        default: return false;
     }
 }
 
@@ -299,62 +499,98 @@ export function computeFaceTextureScore(video: HTMLVideoElement, frame: FaceScan
 // ============================================================
 
 export function updateLivenessTracker(tracker: LivenessTracker, frame: FaceScanFrame, video: HTMLVideoElement): void {
-    tracker.frames.push(frame);
+    // --- Movement Continuity Check ---
+    const continuity = checkMovementContinuity(tracker, frame);
+    if (!continuity.isSmooth) tracker.positionJumps++;
+    if (continuity.sizeJump) tracker.positionJumps++;
 
-    // Track Eye Aspect Ratio for blink detection
+    tracker.frames.push(frame);
+    tracker.faceSizeHistory.push(frame.box.width * frame.box.height);
+
+    // --- EAR tracking (blink detection) ---
     const ear = computeEAR(frame.landmarks);
     tracker.earHistory.push(ear);
-
-    // Update EAR min/max for variance detection
     if (ear < tracker.earMin) tracker.earMin = ear;
     if (ear > tracker.earMax) tracker.earMax = ear;
-
-    // Compute running baseline EAR (average of all readings)
     const earSum = tracker.earHistory.reduce((a, b) => a + b, 0);
     tracker.earBaseline = earSum / tracker.earHistory.length;
 
-    // BLINK DETECTION — Relative approach (works with any eye size)
-    // A blink is detected when EAR drops 25%+ below baseline, then recovers
     const earLen = tracker.earHistory.length;
     if (earLen >= 3 && tracker.earBaseline > 0.05) {
         const prev2 = tracker.earHistory[earLen - 3];
         const prev1 = tracker.earHistory[earLen - 2];
         const curr = tracker.earHistory[earLen - 1];
-        const threshold = tracker.earBaseline * 0.75; // 25% drop from baseline
-        const recovery = tracker.earBaseline * 0.85; // recovered to 85% of baseline
-
-        // Pattern: open → closed → open (relative to personal baseline)
+        const threshold = tracker.earBaseline * 0.75;
+        const recovery = tracker.earBaseline * 0.85;
         if (prev2 > recovery && prev1 < threshold && curr > recovery) {
             tracker.blinkCount++;
-            console.log(`👁️ Blink detected! count=${tracker.blinkCount}, EAR: ${prev2.toFixed(3)}→${prev1.toFixed(3)}→${curr.toFixed(3)}, baseline=${tracker.earBaseline.toFixed(3)}`);
-        }
-
-        // Also detect blink via significant single-frame EAR drop
-        if (prev1 > recovery && curr < threshold && earLen >= 4) {
-            // Check if this is a new blink (not the same one being counted)
-            const prevPrev = tracker.earHistory[earLen - 4];
-            if (prevPrev > recovery) {
-                // Will be caught on the next frame when curr recovers
-            }
+            console.log(`👁️ Blink detected! count=${tracker.blinkCount}`);
         }
     }
 
-    // Track head yaw for turn detection
+    // --- Head yaw + pitch tracking ---
     const yaw = estimateHeadYaw(frame.landmarks);
+    const pitch = estimateHeadPitch(frame.landmarks);
     tracker.headYawHistory.push(yaw);
+    tracker.headPitchHistory.push(pitch);
 
     if (tracker.headYawHistory.length >= 2) {
         const minYaw = Math.min(...tracker.headYawHistory);
         const maxYaw = Math.max(...tracker.headYawHistory);
-        // Lowered from 0.10 to 0.06 for easier detection (about 6-8 degrees)
-        if (maxYaw - minYaw > 0.06) {
-            tracker.headTurnDetected = true;
-        }
+        if (maxYaw - minYaw > 0.06) tracker.headTurnDetected = true;
     }
 
-    // Texture score
+    // --- Screen Spoof Detection ---
+    const spoof = detectScreenSpoof(video, frame);
+    tracker.brightnessHistory.push(spoof.brightness);
+    tracker.moireScores.push(spoof.moireScore);
+
+    // Flicker detection: brightness oscillation between frames
+    if (tracker.brightnessHistory.length >= 4) {
+        const recent = tracker.brightnessHistory.slice(-6);
+        let flickerCount = 0;
+        for (let i = 2; i < recent.length; i++) {
+            const diff1 = recent[i] - recent[i - 1];
+            const diff2 = recent[i - 1] - recent[i - 2];
+            if (diff1 * diff2 < 0 && Math.abs(diff1) > 3) flickerCount++;
+        }
+        // Screen refresh causes rapid brightness oscillation
+        const flickerRatio = flickerCount / Math.max(recent.length - 2, 1);
+        const avgMoire = tracker.moireScores.reduce((a, b) => a + b, 0) / tracker.moireScores.length;
+        const spoofScore = Math.min(Math.round(
+            (avgMoire * 40) + (flickerRatio * 30) + (spoof.colorUniformity * 30)
+        ), 100);
+        tracker.spoofScore = spoofScore;
+    }
+
+    // --- Texture score ---
     const textureScore = computeFaceTextureScore(video, frame);
     tracker.textureScores.push(textureScore);
+
+    // --- Challenge Direction Detection ---
+    if (!tracker.challengeCompleted && tracker.challengeIndex < tracker.challenge.length) {
+        const currentStep = tracker.challenge[tracker.challengeIndex];
+        if (!currentStep.startedAt) {
+            currentStep.startedAt = Date.now();
+        }
+
+        const isInPosition = detectChallengeDirection(frame.landmarks, currentStep.direction);
+        if (isInPosition) {
+            currentStep.completed = true;
+            console.log(`🎯 Challenge step ${tracker.challengeIndex + 1}/${tracker.challenge.length} completed: ${currentStep.direction}`);
+            tracker.challengeIndex++;
+            if (tracker.challengeIndex >= tracker.challenge.length) {
+                tracker.challengeCompleted = true;
+                console.log(`✅ All challenge steps completed!`);
+            }
+        }
+
+        // Timeout per step: 4 seconds
+        if (currentStep.startedAt && Date.now() - currentStep.startedAt > 4000 && !currentStep.completed) {
+            // Reset the timer (give more time)
+            currentStep.startedAt = Date.now();
+        }
+    }
 }
 
 // ============================================================
@@ -403,60 +639,76 @@ export function calculateAdvancedLivenessScore(tracker: LivenessTracker): {
     textureScore: number;
     movementScore: number;
     earVariance: number;
+    challengeProgress: number; // 0-100
+    spoofScore: number;
+    continuityOk: boolean;
     details: string;
 } {
     const frames = tracker.frames;
-    if (frames.length < 3) {
-        return { score: 0, blinkDetected: false, headTurnDetected: false, textureScore: 0, movementScore: 0, earVariance: 0, details: 'جاري التحقق...' };
-    }
+    const empty = { score: 0, blinkDetected: false, headTurnDetected: false, textureScore: 0, movementScore: 0, earVariance: 0, challengeProgress: 0, spoofScore: 0, continuityOk: true, details: 'جاري التحقق...' };
+    if (frames.length < 3) return empty;
 
-    // 1. Movement score (25 points max) — face must move naturally
-    let totalMovement = 0;
-    for (let i = 1; i < frames.length; i++) {
-        const p = frames[i - 1], c = frames[i];
-        const dx = (c.box.x + c.box.width / 2) - (p.box.x + p.box.width / 2);
-        const dy = (c.box.y + c.box.height / 2) - (p.box.y + p.box.height / 2);
-        totalMovement += Math.sqrt(dx * dx + dy * dy);
-    }
-    const movementScore = Math.min((totalMovement / (frames.length * 2)), 1) * 25;
+    // --- ANTI-SPOOFING CHECKS ---
 
-    // 2. Head turn score (30 points max) — primary liveness indicator
-    const headTurnScore = tracker.headTurnDetected ? 30 : 0;
+    // 1. Challenge compliance (35 points max) — primary anti-spoof
+    const challengeProgress = (tracker.challengeIndex / tracker.challenge.length) * 100;
+    const challengeScore = tracker.challengeCompleted ? 35 : (tracker.challengeIndex / tracker.challenge.length) * 25;
 
-    // 3. Texture score (25 points max) — anti-screen/print spoofing
+    // 2. Screen spoof detection (25 points max) — moiré + flicker + uniformity
+    const spoofPenalty = Math.min(tracker.spoofScore / 100, 1);
+    const antiSpoofScore = (1 - spoofPenalty) * 25; // Low spoof = high score
+
+    // 3. Movement continuity (20 points max) — smooth = real, jumps = fake
+    const jumpPenalty = Math.min(tracker.positionJumps / 5, 1);
+    const continuityScore = (1 - jumpPenalty) * 20;
+    const continuityOk = tracker.positionJumps < 3;
+
+    // 4. Texture + EAR variance (20 points max combined)
     const avgTexture = tracker.textureScores.length > 0
         ? tracker.textureScores.reduce((a, b) => a + b, 0) / tracker.textureScores.length
         : 0;
-    const textureScore = Math.min((avgTexture / 12), 1) * 25;
-
-    // 4. EAR variance score (20 points max) — eye activity indicator
-    // Real eyes have natural micro-movements and blinks that create EAR variance
-    // Photos/screens have near-zero variance
+    const texturePoints = Math.min((avgTexture / 12), 1) * 10;
     const earVariance = tracker.earMax - tracker.earMin;
-    const earVarianceScore = Math.min((earVariance / 0.06), 1) * 20;
+    const earPoints = Math.min((earVariance / 0.06), 1) * 10;
 
-    // Blink is a BONUS, not a requirement
     const blinkDetected = tracker.blinkCount >= 1;
-    const blinkBonus = blinkDetected ? 10 : 0; // Extra points but not required
+    const blinkBonus = blinkDetected ? 5 : 0;
 
-    const totalScore = Math.min(Math.round(movementScore + headTurnScore + textureScore + earVarianceScore + blinkBonus), 100);
+    const totalScore = Math.min(Math.round(
+        challengeScore + antiSpoofScore + continuityScore + texturePoints + earPoints + blinkBonus
+    ), 100);
 
+    // Generate user-facing details
     let details = '';
-    if (totalScore < 20 && frames.length < 5) details = 'جاري التحقق...';
-    else if (!tracker.headTurnDetected) details = 'حرّك رأسك يميناً أو يساراً قليلاً';
-    else if (avgTexture < 5) details = 'لا يمكن التحقق - يبدو أنك تعرض صورة';
-    else if (earVariance < 0.02) details = 'ارمش بعينيك أو حرّك وجهك بشكل طبيعي';
-    else details = 'تم التحقق ✅';
+    if (tracker.spoofScore > 60) {
+        details = '⚠️ تم كشف شاشة — استخدم وجهك الحقيقي';
+    } else if (!continuityOk) {
+        details = '⚠️ حركة غير طبيعية — لا تغيّر الصورة';
+    } else if (!tracker.challengeCompleted) {
+        const currentStep = tracker.challenge[tracker.challengeIndex];
+        if (currentStep) {
+            details = `${currentStep.icon} ${currentStep.label}`;
+        } else {
+            details = 'اتبع التعليمات...';
+        }
+    } else if (totalScore < 50) {
+        details = 'جاري إتمام التحقق...';
+    } else {
+        details = 'تم التحقق ✅';
+    }
 
-    console.log(`🔍 Liveness: score=${totalScore}, move=${movementScore.toFixed(1)}, turn=${headTurnScore}, tex=${textureScore.toFixed(1)}, earVar=${earVarianceScore.toFixed(1)}, blink=${blinkBonus}, earRange=${tracker.earMin.toFixed(3)}-${tracker.earMax.toFixed(3)}`);
+    console.log(`🛡️ AntiSpoof: score=${totalScore}, challenge=${challengeScore.toFixed(0)}/35, spoof=${antiSpoofScore.toFixed(0)}/25(raw:${tracker.spoofScore}), cont=${continuityScore.toFixed(0)}/20(jumps:${tracker.positionJumps}), tex=${texturePoints.toFixed(0)}, ear=${earPoints.toFixed(0)}, blink=${blinkBonus}`);
 
     return {
         score: totalScore,
         blinkDetected,
         headTurnDetected: tracker.headTurnDetected,
         textureScore: Math.round(avgTexture),
-        movementScore: Math.round(movementScore),
+        movementScore: Math.round(continuityScore),
         earVariance: Math.round(earVariance * 1000) / 1000,
+        challengeProgress,
+        spoofScore: tracker.spoofScore,
+        continuityOk,
         details,
     };
 }
@@ -465,7 +717,7 @@ export function calculateAdvancedLivenessScore(tracker: LivenessTracker): {
 // Multi-Angle Face Registration System
 // ============================================================
 
-export type FaceAngle = 'front' | 'left' | 'right';
+export type FaceAngle = 'front' | 'left' | 'right' | 'up' | 'down';
 
 export interface MultiAngleFaceData {
     descriptor: number[];
@@ -500,6 +752,8 @@ export async function registerFaceAngle({
             front: 'الأمام',
             left: 'اليسار',
             right: 'اليمين',
+            up: 'أعلى',
+            down: 'أسفل',
         };
         const label = angleLabels[angle];
 
@@ -601,7 +855,7 @@ export async function loadAllFaceDescriptors(userId: string): Promise<Array<{
     angle: FaceAngle;
     descriptor: Float32Array;
 }>> {
-    const angles: FaceAngle[] = ['front', 'left', 'right'];
+    const angles: FaceAngle[] = ['front', 'right', 'left', 'up', 'down'];
     const results: Array<{ angle: FaceAngle; descriptor: Float32Array }> = [];
 
     for (const angle of angles) {
@@ -735,26 +989,56 @@ export async function verifyFaceAdvanced(
             return { success: false, error: 'جاري التحقق...', confidence };
         }
 
-        // --- ADVANCED LIVENESS CHECK ---
+        // --- ADVANCED ANTI-SPOOFING LIVENESS CHECK ---
         if (livenessTracker) {
             const liveness = calculateAdvancedLivenessScore(livenessTracker);
 
-            // Hard-fail on photo: texture score too low
-            if (liveness.textureScore < 5 && livenessTracker.textureScores.length >= 5) {
+            // HARD FAIL: Screen spoof detected
+            if (liveness.spoofScore > 60 && livenessTracker.frames.length >= 6) {
                 return {
                     success: false,
-                    error: '⚠️ تم اكتشاف صورة - يجب أن يكون وجهك الحقيقي أمام الكاميرا',
+                    error: '⚠️ تم كشف شاشة — يجب أن يكون وجهك الحقيقي أمام الكاميرا',
                     confidence,
                     livenessScore: liveness.score,
                 };
             }
 
-            // Require reasonable liveness score (movement + head turn + texture + EAR variance)
-            // Blink is a BONUS, not required
-            if (liveness.score < 30) {
+            // HARD FAIL: Too many position jumps (photo switching)
+            if (!liveness.continuityOk && livenessTracker.frames.length >= 6) {
                 return {
                     success: false,
-                    error: liveness.details || 'حرّك رأسك قليلاً للتحقق من هويتك',
+                    error: '⚠️ حركة غير طبيعية — لا تغيّر الصورة المعروضة',
+                    confidence,
+                    livenessScore: liveness.score,
+                };
+            }
+
+            // Challenge not completed yet
+            if (!livenessTracker.challengeCompleted) {
+                return {
+                    success: false,
+                    error: liveness.details || 'اتبع تعليمات التحقق',
+                    confidence,
+                    livenessScore: liveness.score,
+                };
+            }
+
+            // Session nonce validation
+            if (!validateSession(livenessTracker.session.nonce)) {
+                return {
+                    success: false,
+                    error: 'انتهت جلسة التحقق — حاول مرة أخرى',
+                    confidence,
+                    livenessScore: 0,
+                };
+            }
+
+            // All anti-spoofing checks passed + challenge completed
+            // Require minimum combined score of 50
+            if (liveness.score < 50) {
+                return {
+                    success: false,
+                    error: liveness.details || 'حرّك وجهك بشكل طبيعي',
                     confidence,
                     livenessScore: liveness.score,
                 };
@@ -1076,7 +1360,7 @@ export async function checkFaceBiometricRegistered(userId: string): Promise<bool
  */
 export async function ensureBiometricDataLoaded(userId: string): Promise<void> {
     try {
-        const angles: FaceAngle[] = ['front', 'left', 'right'];
+        const angles: FaceAngle[] = ['front', 'right', 'left', 'up', 'down'];
         const promises: Promise<void>[] = [];
 
         for (const angle of angles) {

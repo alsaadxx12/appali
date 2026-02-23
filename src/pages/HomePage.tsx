@@ -25,6 +25,7 @@ import {
     ensureBiometricDataLoaded,
     createLivenessTracker,
     LivenessTracker,
+    ChallengeStep,
 } from '../utils/faceAuth';
 
 export default function HomePage() {
@@ -57,6 +58,10 @@ export default function HomePage() {
     const [hasFace, setHasFace] = useState(false);
     const [blinkDetected, setBlinkDetected] = useState(false);
     const [headTurnDetected, setHeadTurnDetected] = useState(false);
+    const [challengeSteps, setChallengeSteps] = useState<ChallengeStep[]>([]);
+    const [challengeIndex, setChallengeIndex] = useState(0);
+    const [challengeCompleted, setChallengeCompleted] = useState(false);
+    const [spoofDetected, setSpoofDetected] = useState(false);
 
     const SESSION_TIMEOUT = 30 * 60 * 1000; // 30 minutes
 
@@ -219,6 +224,10 @@ export default function HomePage() {
         livenessTrackerRef.current = createLivenessTracker();
         setBlinkDetected(false);
         setHeadTurnDetected(false);
+        setChallengeSteps(livenessTrackerRef.current.challenge);
+        setChallengeIndex(0);
+        setChallengeCompleted(false);
+        setSpoofDetected(false);
 
         const loaded = await loadFaceModels();
         if (!loaded) {
@@ -264,6 +273,11 @@ export default function HomePage() {
                 if (livenessTrackerRef.current) {
                     setBlinkDetected(livenessTrackerRef.current.blinkCount >= 1);
                     setHeadTurnDetected(livenessTrackerRef.current.headTurnDetected);
+                    setChallengeIndex(livenessTrackerRef.current.challengeIndex);
+                    setChallengeCompleted(livenessTrackerRef.current.challengeCompleted);
+                    setSpoofDetected(livenessTrackerRef.current.spoofScore > 60);
+                    // Update challenge steps for UI
+                    setChallengeSteps([...livenessTrackerRef.current.challenge]);
                 }
 
                 drawFaceOverlayWithBeam(
@@ -301,7 +315,7 @@ export default function HomePage() {
                 setScanMessage('ضع وجهك أمام الكاميرا...');
             }
 
-            if (attempts >= 45) { // ~36 seconds (more time for blink+turn)
+            if (attempts >= 60) { // ~30 seconds for 3-step challenge
                 setFaceStatus('fail');
                 setScanMessage('انتهت المهلة');
                 setBiometricError('لم يتم التعرف على الوجه. تأكد من الإضاءة الجيدة وحرّك وجهك.');
@@ -607,39 +621,81 @@ export default function HomePage() {
                                     : scanMessage}
                         </div>
 
-                        {/* Smart guidance text with blink/head hints */}
-                        {scanActive && (
+                        {/* Anti-Spoofing Challenge Steps */}
+                        {scanActive && challengeSteps.length > 0 && (
                             <div style={{
                                 fontSize: 12, color: '#64748b', fontWeight: 700,
                                 marginBottom: 8, lineHeight: 2,
-                                display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'center',
+                                display: 'flex', flexDirection: 'column', gap: 8, alignItems: 'center',
                             }}>
-                                <div style={{ display: 'flex', gap: 8 }}>
-                                    <span style={{
-                                        padding: '4px 12px', borderRadius: 20,
-                                        background: blinkDetected ? 'rgba(16,185,129,0.15)' : 'rgba(255,255,255,0.04)',
-                                        border: `1px solid ${blinkDetected ? '#10b981' : 'rgba(255,255,255,0.08)'}`,
-                                        color: blinkDetected ? '#34d399' : '#64748b',
-                                        fontSize: 11, fontWeight: 800,
-                                        transition: 'all 0.3s',
-                                    }}>
-                                        {blinkDetected ? '✅' : '👁️'} رمشة العين
-                                    </span>
-                                    <span style={{
-                                        padding: '4px 12px', borderRadius: 20,
-                                        background: headTurnDetected ? 'rgba(16,185,129,0.15)' : 'rgba(255,255,255,0.04)',
-                                        border: `1px solid ${headTurnDetected ? '#10b981' : 'rgba(255,255,255,0.08)'}`,
-                                        color: headTurnDetected ? '#34d399' : '#64748b',
-                                        fontSize: 11, fontWeight: 800,
-                                        transition: 'all 0.3s',
-                                    }}>
-                                        {headTurnDetected ? '✅' : '↔️'} تحريك الرأس
-                                    </span>
+                                {/* Challenge step pills */}
+                                <div style={{ display: 'flex', gap: 6, direction: 'ltr' }}>
+                                    {challengeSteps.map((step, i) => (
+                                        <span key={i} style={{
+                                            padding: '5px 14px', borderRadius: 20,
+                                            background: step.completed
+                                                ? 'rgba(16,185,129,0.15)'
+                                                : i === challengeIndex && !challengeCompleted
+                                                    ? 'rgba(99,102,241,0.12)'
+                                                    : 'rgba(255,255,255,0.04)',
+                                            border: `1.5px solid ${step.completed
+                                                ? '#10b981'
+                                                : i === challengeIndex && !challengeCompleted
+                                                    ? '#818cf8'
+                                                    : 'rgba(255,255,255,0.08)'}`,
+                                            color: step.completed ? '#34d399'
+                                                : i === challengeIndex && !challengeCompleted ? '#a5b4fc' : '#64748b',
+                                            fontSize: 13, fontWeight: 900,
+                                            transition: 'all 0.3s ease',
+                                            transform: i === challengeIndex && !challengeCompleted && !step.completed
+                                                ? 'scale(1.15)' : 'scale(1)',
+                                            animation: i === challengeIndex && !challengeCompleted && !step.completed
+                                                ? 'fvPulse 1s ease-in-out infinite' : 'none',
+                                        }}>
+                                            {step.completed ? '✅' : step.icon}
+                                        </span>
+                                    ))}
                                 </div>
-                                <div style={{ fontSize: 11, color: '#475569', marginTop: 2 }}>
-                                    {!blinkDetected && 'يرجى الرمش بعينيك بشكل طبيعي'}
-                                    {blinkDetected && !headTurnDetected && 'الآن حرّك رأسك يميناً أو يساراً قليلاً'}
-                                    {blinkDetected && headTurnDetected && 'ممتاز! جاري إتمام التحقق...'}
+
+                                {/* Current instruction */}
+                                <div style={{
+                                    fontSize: 13, fontWeight: 800, marginTop: 2,
+                                    color: spoofDetected ? '#fb7185'
+                                        : challengeCompleted ? '#34d399'
+                                            : '#e2e8f0',
+                                    transition: 'color 0.3s',
+                                }}>
+                                    {spoofDetected
+                                        ? '⚠️ تم كشف شاشة — استخدم وجهك الحقيقي'
+                                        : challengeCompleted
+                                            ? '✅ تم إتمام التحدّي — جاري التحقق النهائي...'
+                                            : challengeSteps[challengeIndex]
+                                                ? `${challengeSteps[challengeIndex].icon} ${challengeSteps[challengeIndex].label}`
+                                                : 'اتبع التعليمات...'}
+                                </div>
+
+                                {/* Anti-spoof shield indicator */}
+                                <div style={{
+                                    display: 'flex', gap: 6, marginTop: 2,
+                                }}>
+                                    <span style={{
+                                        padding: '3px 10px', borderRadius: 12,
+                                        background: 'rgba(99,102,241,0.08)',
+                                        border: '1px solid rgba(99,102,241,0.15)',
+                                        fontSize: 9, fontWeight: 800, color: '#818cf8',
+                                        display: 'flex', alignItems: 'center', gap: 4,
+                                    }}>
+                                        🛡️ Anti-Spoof
+                                    </span>
+                                    <span style={{
+                                        padding: '3px 10px', borderRadius: 12,
+                                        background: 'rgba(245,158,11,0.08)',
+                                        border: '1px solid rgba(245,158,11,0.15)',
+                                        fontSize: 9, fontWeight: 800, color: '#f59e0b',
+                                        display: 'flex', alignItems: 'center', gap: 4,
+                                    }}>
+                                        🔒 Nonce
+                                    </span>
                                 </div>
                             </div>
                         )}

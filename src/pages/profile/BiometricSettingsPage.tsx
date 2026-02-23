@@ -25,7 +25,7 @@ export default function BiometricSettingsPage({ onBack }: Props) {
 
     // Face status (read-only)
     const [hasFace, setHasFace] = useState(false);
-    const [faceAngles, setFaceAngles] = useState<{ front: boolean; right: boolean; left: boolean }>({ front: false, right: false, left: false });
+    const [faceAngles, setFaceAngles] = useState<{ front: boolean; right: boolean; left: boolean; up: boolean; down: boolean }>({ front: false, right: false, left: false, up: false, down: false });
 
     const isAdmin = user?.role === 'admin';
     const userId = user?.id || '';
@@ -39,13 +39,15 @@ export default function BiometricSettingsPage({ onBack }: Props) {
             setSettings(savedSettings);
 
             if (userId) {
-                const [front, right, left] = await Promise.all([
+                const [front, right, left, up, down] = await Promise.all([
                     isFaceAngleRegistered(userId, 'front'),
                     isFaceAngleRegistered(userId, 'right'),
                     isFaceAngleRegistered(userId, 'left'),
+                    isFaceAngleRegistered(userId, 'up'),
+                    isFaceAngleRegistered(userId, 'down'),
                 ]);
-                setFaceAngles({ front, right, left });
-                setHasFace(front || right || left);
+                setFaceAngles({ front, right, left, up, down });
+                setHasFace(front || right || left || up || down);
             }
         } catch (e) {
             console.error('Error loading biometric settings:', e);
@@ -184,18 +186,18 @@ export default function BiometricSettingsPage({ onBack }: Props) {
                     </div>
                 </div>
                 {/* Angle breakdown */}
-                <div style={{ display: 'flex', gap: 8 }}>
-                    {(['front', 'right', 'left'] as const).map(angle => (
-                        <div key={angle} style={{
-                            flex: 1, padding: '8px', textAlign: 'center', borderRadius: 10,
-                            background: faceAngles[angle] ? 'rgba(16,185,129,0.06)' : 'var(--bg-glass)',
-                            border: `1px solid ${faceAngles[angle] ? 'rgba(16,185,129,0.2)' : 'var(--border-glass)'}`,
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+                    {([{ k: 'front', l: 'أمام', i: '😐' }, { k: 'right', l: 'يمين', i: '👉' }, { k: 'left', l: 'يسار', i: '👈' }, { k: 'up', l: 'أعلى', i: '☝️' }, { k: 'down', l: 'أسفل', i: '👇' }] as const).map(({ k, l, i }) => (
+                        <div key={k} style={{
+                            flex: '1 1 auto', minWidth: 52, padding: '6px 4px', textAlign: 'center', borderRadius: 10,
+                            background: faceAngles[k] ? 'rgba(16,185,129,0.06)' : 'var(--bg-glass)',
+                            border: `1px solid ${faceAngles[k] ? 'rgba(16,185,129,0.2)' : 'var(--border-glass)'}`,
                         }}>
-                            <div style={{ fontSize: 16, marginBottom: 2 }}>
-                                {faceAngles[angle] ? '✅' : angle === 'front' ? '😐' : angle === 'right' ? '👉' : '👈'}
+                            <div style={{ fontSize: 14, marginBottom: 2 }}>
+                                {faceAngles[k] ? '✅' : i}
                             </div>
-                            <div style={{ fontSize: 10, fontWeight: 700, color: faceAngles[angle] ? '#10b981' : 'var(--text-muted)' }}>
-                                {angle === 'front' ? 'أمام' : angle === 'right' ? 'يمين' : 'يسار'}
+                            <div style={{ fontSize: 9, fontWeight: 700, color: faceAngles[k] ? '#10b981' : 'var(--text-muted)' }}>
+                                {l}
                             </div>
                         </div>
                     ))}
@@ -209,7 +211,7 @@ export default function BiometricSettingsPage({ onBack }: Props) {
             }}>
                 <User size={18} style={{ color: 'var(--accent-blue)', flexShrink: 0, marginTop: 2 }} />
                 <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.8 }}>
-                    يتم تسجيل بصمة الوجه (3 زوايا) عند إنشاء حساب الموظف.
+                    يتم تسجيل بصمة الوجه (5 اتجاهات) عند إنشاء حساب الموظف.
                     لا يتم تخزين أي صور — فقط embeddings رقمية مشفّرة.
                 </div>
             </div>
