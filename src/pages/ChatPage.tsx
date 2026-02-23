@@ -368,19 +368,10 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
         <div className="page-content page-enter chat-root" style={{ padding: '16px 12px', background: 'var(--bg-primary)' }}>
             <style>{css}</style>
 
-            {/* Header Redesign */}
-            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24, padding: '0 4px' }}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-                    <button onClick={onBack} style={{ width: 44, height: 44, borderRadius: 14, background: 'var(--bg-glass)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)', border: '1px solid var(--border-glass)' }}>
-                        <ArrowRight size={22} />
-                    </button>
-                    <div>
-                        <h1 style={{ fontSize: 28, fontWeight: 950, margin: 0, background: 'linear-gradient(135deg, #fff 0%, #a5b4fc 100%)', WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent', letterSpacing: -1 }}>الدردشة <span style={{ color: '#6366f1', WebkitTextFillColor: 'initial' }}>.</span></h1>
-                        <p style={{ fontSize: 13, color: 'var(--text-muted)', fontWeight: 600, margin: 0 }}>تواصل بشكل أسرع و أذكى</p>
-                    </div>
-                </div>
-                <button onClick={() => setShowBgPicker(true)} style={{ width: 44, height: 44, borderRadius: 14, background: 'var(--bg-glass)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent-blue)', border: '1px solid var(--border-glass)' }}>
-                    <Edit3 size={20} />
+            {/* Settings Button */}
+            <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 16, padding: '0 4px' }}>
+                <button onClick={() => setShowBgPicker(true)} style={{ width: 40, height: 40, borderRadius: 12, background: 'var(--bg-glass)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--accent-blue)', border: '1px solid var(--border-glass)' }}>
+                    <Edit3 size={18} />
                 </button>
             </div>
 
@@ -395,7 +386,7 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
                         <button key={u.id} onClick={() => openChatWith(u)} style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8, minWidth: 72, transition: 'transform 0.2s' }}>
                             <div style={{ position: 'relative' }}>
                                 <div style={{
-                                    width: 64, height: 64, borderRadius: 22,
+                                    width: 64, height: 64, borderRadius: '50%',
                                     background: u.avatar ? `url(${u.avatar}) center/cover` : 'linear-gradient(135deg, #6366f1, #3b82f6)',
                                     border: u.online ? '3px solid #22c55e' : '3px solid var(--border-glass)',
                                     display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontWeight: 900, fontSize: 18,
