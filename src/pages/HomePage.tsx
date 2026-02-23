@@ -23,6 +23,8 @@ import {
     drawFaceOverlay,
     FaceScanFrame,
     ensureBiometricDataLoaded,
+    createLivenessTracker,
+    LivenessTracker,
 } from '../utils/faceAuth';
 
 export default function HomePage() {
@@ -51,7 +53,10 @@ export default function HomePage() {
     const streamRef = useRef<MediaStream | null>(null);
     const scanIntervalRef = useRef<any>(null);
     const framesRef = useRef<FaceScanFrame[]>([]);
+    const livenessTrackerRef = useRef<LivenessTracker | null>(null);
     const [hasFace, setHasFace] = useState(false);
+    const [blinkDetected, setBlinkDetected] = useState(false);
+    const [headTurnDetected, setHeadTurnDetected] = useState(false);
 
     const SESSION_TIMEOUT = 30 * 60 * 1000; // 30 minutes
 
@@ -211,6 +216,9 @@ export default function HomePage() {
         setLivenessProgress(0);
         setScanMessage('جاري تحميل نظام التعرف...');
         framesRef.current = [];
+        livenessTrackerRef.current = createLivenessTracker();
+        setBlinkDetected(false);
+        setHeadTurnDetected(false);
 
         const loaded = await loadFaceModels();
         if (!loaded) {
@@ -240,12 +248,23 @@ export default function HomePage() {
             // Detect face and draw overlay
             const frame = await detectFace(videoRef.current);
             if (frame) {
-                // Verify with liveness
-                const result = await verifyFaceAdvanced(user.id, videoRef.current, framesRef.current);
+                // Verify with full liveness tracker
+                const result = await verifyFaceAdvanced(
+                    user.id,
+                    videoRef.current,
+                    framesRef.current,
+                    livenessTrackerRef.current ?? undefined
+                );
                 const conf = result.confidence ?? 0;
                 const liveness = result.livenessScore ?? 0;
                 setFaceConfidence(conf);
                 setLivenessProgress(Math.min(liveness, 100));
+
+                // Update blink/head states for UI hints
+                if (livenessTrackerRef.current) {
+                    setBlinkDetected(livenessTrackerRef.current.blinkCount >= 1);
+                    setHeadTurnDetected(livenessTrackerRef.current.headTurnDetected);
+                }
 
                 drawFaceOverlay(
                     canvasRef.current, videoRef.current, frame,
@@ -265,11 +284,11 @@ export default function HomePage() {
                     return;
                 }
 
-                // Update messages based on progress
-                if (conf > 40 && liveness < 25) {
-                    setScanMessage('🔄 حرّك وجهك قليلاً لكشف الحيوية...');
-                } else if (conf > 70) {
-                    setScanMessage('جاري التحقق من الحيوية...');
+                // Update guidance message based on liveness result
+                if (result.error && result.error !== 'جاري التحقق...') {
+                    setScanMessage(result.error);
+                } else if (conf > 40) {
+                    setScanMessage('جاري التحقق من الهوية...');
                 } else if (conf > 0) {
                     setScanMessage('جاري مطابقة الوجه...');
                 }
@@ -279,13 +298,13 @@ export default function HomePage() {
                     const ctx = canvasRef.current.getContext('2d');
                     if (ctx) ctx.clearRect(0, 0, canvasRef.current.width, canvasRef.current.height);
                 }
-                setScanMessage('لم يتم اكتشاف وجه...');
+                setScanMessage('ضع وجهك أمام الكاميرا...');
             }
 
-            if (attempts >= 35) { // ~28 seconds
+            if (attempts >= 45) { // ~36 seconds (more time for blink+turn)
                 setFaceStatus('fail');
                 setScanMessage('انتهت المهلة');
-                setBiometricError('لم يتم التعرف على الوجه. حاول مرة أخرى.');
+                setBiometricError('لم يتم التعرف على الوجه. تأكد من الإضاءة الجيدة وحرّك وجهك.');
                 cleanupCamera();
                 if (scanIntervalRef.current) clearInterval(scanIntervalRef.current);
             }
@@ -588,17 +607,40 @@ export default function HomePage() {
                                     : scanMessage}
                         </div>
 
-                        {/* Smart guidance text */}
+                        {/* Smart guidance text with blink/head hints */}
                         {scanActive && (
                             <div style={{
-                                fontSize: 11, color: '#64748b', fontWeight: 600,
-                                marginBottom: 8, lineHeight: 1.8,
+                                fontSize: 12, color: '#64748b', fontWeight: 700,
+                                marginBottom: 8, lineHeight: 2,
+                                display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'center',
                             }}>
-                                {confPct === 0 && livePct === 0 && 'وجّه وجهك نحو الكاميرا في إضاءة جيدة'}
-                                {confPct > 0 && confPct <= 40 && 'جاري مطابقة ملامح الوجه...'}
-                                {confPct > 40 && livePct < 25 && '🔄 حرّك رأسك ببطء يميناً ويساراً'}
-                                {confPct > 40 && livePct >= 25 && livePct < 50 && 'جيد! استمر بالحركة البطيئة...'}
-                                {confPct > 60 && livePct >= 50 && 'جاري التأكيد النهائي...'}
+                                <div style={{ display: 'flex', gap: 8 }}>
+                                    <span style={{
+                                        padding: '4px 12px', borderRadius: 20,
+                                        background: blinkDetected ? 'rgba(16,185,129,0.15)' : 'rgba(255,255,255,0.04)',
+                                        border: `1px solid ${blinkDetected ? '#10b981' : 'rgba(255,255,255,0.08)'}`,
+                                        color: blinkDetected ? '#34d399' : '#64748b',
+                                        fontSize: 11, fontWeight: 800,
+                                        transition: 'all 0.3s',
+                                    }}>
+                                        {blinkDetected ? '✅' : '👁️'} رمشة العين
+                                    </span>
+                                    <span style={{
+                                        padding: '4px 12px', borderRadius: 20,
+                                        background: headTurnDetected ? 'rgba(16,185,129,0.15)' : 'rgba(255,255,255,0.04)',
+                                        border: `1px solid ${headTurnDetected ? '#10b981' : 'rgba(255,255,255,0.08)'}`,
+                                        color: headTurnDetected ? '#34d399' : '#64748b',
+                                        fontSize: 11, fontWeight: 800,
+                                        transition: 'all 0.3s',
+                                    }}>
+                                        {headTurnDetected ? '✅' : '↔️'} تحريك الرأس
+                                    </span>
+                                </div>
+                                <div style={{ fontSize: 11, color: '#475569', marginTop: 2 }}>
+                                    {!blinkDetected && 'يرجى الرمش بعينيك بشكل طبيعي'}
+                                    {blinkDetected && !headTurnDetected && 'الآن حرّك رأسك يميناً أو يساراً قليلاً'}
+                                    {blinkDetected && headTurnDetected && 'ممتاز! جاري إتمام التحقق...'}
+                                </div>
                             </div>
                         )}
 

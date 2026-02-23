@@ -169,23 +169,188 @@ export function drawFaceOverlay(
 }
 
 // ============================================================
-// Liveness Detection
-// Check face movement across multiple frames to prevent photo attacks
-// Returns liveness score 0-100
+// Liveness State Tracker — tracks events across verification loop
+// ============================================================
+
+export interface LivenessTracker {
+    frames: FaceScanFrame[];
+    earHistory: number[];        // Eye Aspect Ratio history for blink detection
+    blinkCount: number;
+    headYawHistory: number[];    // Horizontal head angle history
+    headTurnDetected: boolean;
+    textureScores: number[];     // Pixel variance scores
+    startTime: number;
+}
+
+export function createLivenessTracker(): LivenessTracker {
+    return {
+        frames: [],
+        earHistory: [],
+        blinkCount: 0,
+        headYawHistory: [],
+        headTurnDetected: false,
+        textureScores: [],
+        startTime: Date.now(),
+    };
+}
+
+// ============================================================
+// Eye Aspect Ratio (EAR) — detects blink
+// EAR = (|p2-p6| + |p3-p5|) / (2 * |p1-p4|)
+// Landmark indices: Left eye 36-41, Right eye 42-47
+// ============================================================
+
+function euclideanDist2D(a: { x: number; y: number }, b: { x: number; y: number }): number {
+    const dx = a.x - b.x;
+    const dy = a.y - b.y;
+    return Math.sqrt(dx * dx + dy * dy);
+}
+
+export function computeEAR(landmarks: faceapi.FaceLandmarks68): number {
+    const pts = landmarks.positions;
+
+    // Left eye: 36=p1, 37=p2, 38=p3, 39=p4, 40=p5, 41=p6
+    const leftEAR = (
+        euclideanDist2D(pts[37], pts[41]) + euclideanDist2D(pts[38], pts[40])
+    ) / (2 * euclideanDist2D(pts[36], pts[39]) + 1e-6);
+
+    // Right eye: 42=p1, 43=p2, 44=p3, 45=p4, 46=p5, 47=p6
+    const rightEAR = (
+        euclideanDist2D(pts[43], pts[47]) + euclideanDist2D(pts[44], pts[46])
+    ) / (2 * euclideanDist2D(pts[42], pts[45]) + 1e-6);
+
+    return (leftEAR + rightEAR) / 2;
+}
+
+// ============================================================
+// Head Yaw Estimation — detects left/right head rotation
+// Uses nose (30) vs eye corners to estimate horizontal angle
+// ============================================================
+
+export function estimateHeadYaw(landmarks: faceapi.FaceLandmarks68): number {
+    const pts = landmarks.positions;
+    // Left eye outer: 36, Right eye outer: 45, Nose tip: 30
+    const leftEye = pts[36];
+    const rightEye = pts[45];
+    const nose = pts[30];
+
+    const eyeMidX = (leftEye.x + rightEye.x) / 2;
+    const eyeWidth = rightEye.x - leftEye.x;
+    // Yaw: positive = looking right, negative = looking left
+    if (eyeWidth < 1) return 0;
+    return (nose.x - eyeMidX) / eyeWidth; // Normalized -0.5 to +0.5
+}
+
+// ============================================================
+// Texture Anti-Spoofing
+// Real faces have high pixel variance (skin texture).
+// Printed photos on screens tend to be smoother or have moiré patterns.
+// ============================================================
+
+export function computeFaceTextureScore(video: HTMLVideoElement, frame: FaceScanFrame): number {
+    try {
+        const { box } = frame;
+        if (box.width < 20 || box.height < 20) return 50; // unknown
+
+        const canvas = document.createElement('canvas');
+        const sampleSize = 64;
+        canvas.width = sampleSize;
+        canvas.height = sampleSize;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return 50;
+
+        // Sample the central face region
+        const cx = box.x + box.width * 0.25;
+        const cy = box.y + box.height * 0.25;
+        const cw = box.width * 0.5;
+        const ch = box.height * 0.5;
+        ctx.drawImage(video, cx, cy, cw, ch, 0, 0, sampleSize, sampleSize);
+
+        const imgData = ctx.getImageData(0, 0, sampleSize, sampleSize).data;
+        const grayscale: number[] = [];
+        for (let i = 0; i < imgData.length; i += 4) {
+            grayscale.push(imgData[i] * 0.299 + imgData[i + 1] * 0.587 + imgData[i + 2] * 0.114);
+        }
+
+        // Compute Laplacian variance (edge sharpness / texture richness)
+        let laplacianSum = 0;
+        const w = sampleSize;
+        for (let y = 1; y < sampleSize - 1; y++) {
+            for (let x = 1; x < w - 1; x++) {
+                const idx = y * w + x;
+                const lap = Math.abs(
+                    -grayscale[idx - w - 1] + 0 * grayscale[idx - w] - grayscale[idx - w + 1]
+                    + 0 * grayscale[idx - 1] + 4 * grayscale[idx] + 0 * grayscale[idx + 1]
+                    - grayscale[idx + w - 1] + 0 * grayscale[idx + w] - grayscale[idx + w + 1]
+                );
+                laplacianSum += lap;
+            }
+        }
+        const variance = laplacianSum / ((sampleSize - 2) * (sampleSize - 2));
+
+        // Real faces: variance typically 8-50+
+        // Printed/screen photos: typically < 5 (very smooth after JPEG/display compression)
+        return Math.min(variance * 3, 100); // Scale to 0-100
+    } catch {
+        return 50;
+    }
+}
+
+// ============================================================
+// Update Liveness Tracker — called every frame during verification
+// ============================================================
+
+export function updateLivenessTracker(tracker: LivenessTracker, frame: FaceScanFrame, video: HTMLVideoElement): void {
+    tracker.frames.push(frame);
+
+    // Track Eye Aspect Ratio for blink detection
+    const ear = computeEAR(frame.landmarks);
+    tracker.earHistory.push(ear);
+
+    // Detect blink: EAR drops below 0.20 then recovers above 0.25
+    const earLen = tracker.earHistory.length;
+    if (earLen >= 3) {
+        const prev2 = tracker.earHistory[earLen - 3];
+        const prev1 = tracker.earHistory[earLen - 2];
+        const curr = tracker.earHistory[earLen - 1];
+        // Closed -> Open transition
+        if (prev1 < 0.20 && prev2 > 0.23 && curr > 0.23) {
+            tracker.blinkCount++;
+        }
+    }
+
+    // Track head yaw for turn detection
+    const yaw = estimateHeadYaw(frame.landmarks);
+    tracker.headYawHistory.push(yaw);
+
+    if (tracker.headYawHistory.length >= 2) {
+        const minYaw = Math.min(...tracker.headYawHistory);
+        const maxYaw = Math.max(...tracker.headYawHistory);
+        // Require at least 0.10 normalized yaw change (about 10-15 degrees of head turn)
+        if (maxYaw - minYaw > 0.10) {
+            tracker.headTurnDetected = true;
+        }
+    }
+
+    // Texture score
+    const textureScore = computeFaceTextureScore(video, frame);
+    tracker.textureScores.push(textureScore);
+}
+
+// ============================================================
+// Compute final liveness score from tracker (0-100)
 // ============================================================
 
 export function calculateLivenessScore(frames: FaceScanFrame[]): number {
     if (frames.length < 3) return 0;
 
     let totalMovement = 0;
-    let sizeVariation = 0;
     const sizes: number[] = [];
 
     for (let i = 1; i < frames.length; i++) {
         const prev = frames[i - 1];
         const curr = frames[i];
 
-        // Calculate center-point movement
         const prevCX = prev.box.x + prev.box.width / 2;
         const prevCY = prev.box.y + prev.box.height / 2;
         const currCX = curr.box.x + curr.box.width / 2;
@@ -194,23 +359,76 @@ export function calculateLivenessScore(frames: FaceScanFrame[]): number {
         const dx = Math.abs(currCX - prevCX);
         const dy = Math.abs(currCY - prevCY);
         totalMovement += Math.sqrt(dx * dx + dy * dy);
-
         sizes.push(curr.box.width * curr.box.height);
     }
     sizes.push(frames[0].box.width * frames[0].box.height);
 
-    // Calculate face size variation (indicates 3D object, not flat photo)
     const avgSize = sizes.reduce((a, b) => a + b, 0) / sizes.length;
-    sizeVariation = sizes.reduce((a, b) => a + Math.abs(b - avgSize), 0) / sizes.length;
+    const sizeVariation = sizes.reduce((a, b) => a + Math.abs(b - avgSize), 0) / sizes.length;
 
-    // Score based on movement (some movement = real, too static = photo)
-    // Expect slight natural movement between 2-50 pixels total
-    const movementScore = Math.min(totalMovement / 15, 1) * 60;
-
-    // Score based on size variation (real face has slight depth changes)
-    const sizeScore = Math.min(sizeVariation / (avgSize * 0.02), 1) * 40;
+    const movementScore = Math.min(totalMovement / 15, 1) * 50;
+    const sizeScore = Math.min(sizeVariation / (avgSize * 0.02), 1) * 50;
 
     return Math.min(Math.round(movementScore + sizeScore), 100);
+}
+
+// ============================================================
+// Advanced liveness score from full tracker — MULTI-FACTOR
+// ============================================================
+
+export function calculateAdvancedLivenessScore(tracker: LivenessTracker): {
+    score: number;
+    blinkDetected: boolean;
+    headTurnDetected: boolean;
+    textureScore: number;
+    movementScore: number;
+    details: string;
+} {
+    const frames = tracker.frames;
+    if (frames.length < 3) {
+        return { score: 0, blinkDetected: false, headTurnDetected: false, textureScore: 0, movementScore: 0, details: 'جاري التحقق...' };
+    }
+
+    // 1. Movement score (20 points max)
+    let totalMovement = 0;
+    for (let i = 1; i < frames.length; i++) {
+        const p = frames[i - 1], c = frames[i];
+        const dx = (c.box.x + c.box.width / 2) - (p.box.x + p.box.width / 2);
+        const dy = (c.box.y + c.box.height / 2) - (p.box.y + p.box.height / 2);
+        totalMovement += Math.sqrt(dx * dx + dy * dy);
+    }
+    const movementScore = Math.min((totalMovement / (frames.length * 3)), 1) * 20;
+
+    // 2. Blink score (35 points max) — most reliable real-person indicator
+    const blinkDetected = tracker.blinkCount >= 1;
+    const blinkScore = blinkDetected ? 35 : 0;
+
+    // 3. Head turn score (25 points max)
+    const headTurnScore = tracker.headTurnDetected ? 25 : 0;
+
+    // 4. Texture score (20 points max) — anti-screen/print spoofing
+    const avgTexture = tracker.textureScores.length > 0
+        ? tracker.textureScores.reduce((a, b) => a + b, 0) / tracker.textureScores.length
+        : 0;
+    // Maps texture variance to 0-20 points. Real faces: ~15-40+, screens: <5
+    const textureScore = Math.min((avgTexture / 15), 1) * 20;
+
+    const totalScore = Math.min(Math.round(movementScore + blinkScore + headTurnScore + textureScore), 100);
+
+    let details = '';
+    if (!blinkDetected) details = 'يرجى الرمش بعينيك';
+    else if (!tracker.headTurnDetected) details = 'يرجى تحريك رأسك يميناً أو يساراً قليلاً';
+    else if (avgTexture < 5) details = 'لا يمكن التحقق - يبدو أنك تعرض صورة';
+    else details = 'تم التحقق';
+
+    return {
+        score: totalScore,
+        blinkDetected,
+        headTurnDetected: tracker.headTurnDetected,
+        textureScore: Math.round(avgTexture),
+        movementScore: Math.round(movementScore),
+        details,
+    };
 }
 
 // ============================================================
@@ -305,7 +523,8 @@ export async function registerFace(
 export async function verifyFaceAdvanced(
     userId: string,
     video: HTMLVideoElement,
-    collectedFrames: FaceScanFrame[]
+    collectedFrames: FaceScanFrame[],
+    livenessTracker?: LivenessTracker
 ): Promise<FaceVerifyResult> {
     try {
         // Try localStorage first, then Firestore
@@ -341,31 +560,73 @@ export async function verifyFaceAdvanced(
         // Add to collected frames for liveness
         collectedFrames.push(currentFrame);
 
+        // Update advanced liveness tracker if provided
+        if (livenessTracker) updateLivenessTracker(livenessTracker, currentFrame, video);
+
         // Calculate match distance
         const distance = faceapi.euclideanDistance(currentFrame.descriptor, storedDescriptor);
         const confidence = Math.max(0, Math.min(100, Math.round((1 - distance / 1.0) * 100)));
 
-        // Calculate liveness score
-        const livenessScore = calculateLivenessScore(collectedFrames);
-
-        // Decision thresholds
-        const matchThreshold = 0.55;
-        const livenessThreshold = 25;
-        const minFrames = 4;
+        // --- STRICTER thresholds vs old code ---
+        const matchThreshold = 0.50;  // was 0.55 — stricter face match required
+        const minFrames = 6;          // was 4 — need more frames
 
         if (distance > matchThreshold) {
-            return { success: false, error: 'الوجه غير مطابق', confidence, livenessScore };
+            return { success: false, error: 'الوجه غير مطابق', confidence };
         }
 
         if (collectedFrames.length < minFrames) {
-            return { success: false, error: 'جاري التحقق...', confidence, livenessScore };
+            return { success: false, error: 'جاري التحقق...', confidence };
         }
 
-        if (livenessScore < livenessThreshold) {
-            return { success: false, error: 'يرجى تحريك وجهك قليلاً للتأكد من أنك شخص حقيقي', confidence, livenessScore };
-        }
+        // --- ADVANCED LIVENESS CHECK ---
+        if (livenessTracker) {
+            const liveness = calculateAdvancedLivenessScore(livenessTracker);
 
-        return { success: true, confidence, livenessScore };
+            // Hard-fail on photo: texture score must be reasonable
+            if (liveness.textureScore < 5 && livenessTracker.textureScores.length >= 5) {
+                return {
+                    success: false,
+                    error: '⚠️ تم اكتشاف صورة - يجب أن يكون وجهك الحقيقي أمام الكاميرا',
+                    confidence,
+                    livenessScore: liveness.score,
+                };
+            }
+
+            // Require both blink AND head movement, OR very high score
+            if (liveness.score < 55) {
+                return {
+                    success: false,
+                    error: liveness.details || 'يرجى الرمش بعينيك وتحريك رأسك قليلاً',
+                    confidence,
+                    livenessScore: liveness.score,
+                };
+            }
+
+            // Even if score passes — if no blink detected after enough frames, reject
+            if (!liveness.blinkDetected && livenessTracker.frames.length >= 12) {
+                return {
+                    success: false,
+                    error: 'يرجى الرمش بعينيك مرة واحدة على الأقل',
+                    confidence,
+                    livenessScore: liveness.score,
+                };
+            }
+
+            return { success: true, confidence, livenessScore: liveness.score };
+        } else {
+            // Fallback to basic liveness if no tracker
+            const livenessScore = calculateLivenessScore(collectedFrames);
+            if (livenessScore < 30) {
+                return {
+                    success: false,
+                    error: 'يرجى تحريك وجهك قليلاً للتأكد من أنك شخص حقيقي',
+                    confidence,
+                    livenessScore,
+                };
+            }
+            return { success: true, confidence, livenessScore };
+        }
     } catch (err: any) {
         console.error('Face verify error:', err);
         return { success: false, error: err.message || 'فشل التحقق' };
