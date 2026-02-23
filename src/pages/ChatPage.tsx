@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ArrowRight, Send, Search, Users, MessageCircle, Loader2, Smile, Paperclip, Image as ImageIcon, X, Trash2, Edit3, Check, Clock, Download, FileText, Camera, EyeOff, CheckCheck, MapPin, Archive, UserCircle, Phone, PhoneOff } from 'lucide-react';
+import { ArrowRight, Send, Search, Users, MessageCircle, Loader2, Smile, Paperclip, Image as ImageIcon, X, Trash2, Edit3, Check, Clock, Download, FileText, Camera, EyeOff, CheckCheck, MapPin, Archive, UserCircle, Phone, PhoneOff, MicOff, Mic } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { db, storage } from '../firebase';
 import { collection, doc, getDocs, getDoc, addDoc, query, where, onSnapshot, serverTimestamp, Timestamp, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
@@ -72,13 +72,19 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
     // ========== Voice Call State ==========
     const [callState, setCallState] = useState<'idle' | 'calling' | 'ringing' | 'connected'>('idle');
     const [callDocId, setCallDocId] = useState<string | null>(null);
-    const [callPartner, setCallPartner] = useState<{ name: string; avatar?: string } | null>(null);
+    const [callPartner, setCallPartner] = useState<{ id?: string; name: string; avatar?: string } | null>(null);
     const [callDuration, setCallDuration] = useState(0);
+    const [callMuted, setCallMuted] = useState(false);
+    const [callDirection, setCallDirection] = useState<'outgoing' | 'incoming'>('outgoing');
+    const callConvIdRef = useRef<string | null>(null);
     const peerRef = useRef<RTCPeerConnection | null>(null);
     const localStreamRef = useRef<MediaStream | null>(null);
     const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
+    const ringtoneRef = useRef<HTMLAudioElement | null>(null);
     const callTimerRef = useRef<any>(null);
     const callUnsubRef = useRef<(() => void) | null>(null);
+    const callTimeoutRef = useRef<any>(null);
+    const callDurationRef = useRef(0);
 
     // Swipe-back gesture for active chat
     const chatSwipeX = useRef(0);
@@ -95,9 +101,16 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
             localStreamRef.current = stream;
-            setCallPartner({ name: partner.name, avatar: partner.avatar });
+            setCallPartner({ id: partner.id, name: partner.name, avatar: partner.avatar });
             setCallState('calling');
             setCallDuration(0);
+            callDurationRef.current = 0;
+            setCallMuted(false);
+            setCallDirection('outgoing');
+
+            // Find or remember convId for this partner
+            const existingConv = convs.find(c => c.participants.includes(partner.id) && c.participants.includes(uid));
+            callConvIdRef.current = existingConv?.id || null;
 
             const pc = new RTCPeerConnection(ICE_SERVERS);
             peerRef.current = pc;
@@ -141,7 +154,10 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
                 if (data.status === 'answered' && data.answer && !pc.currentRemoteDescription) {
                     pc.setRemoteDescription(new RTCSessionDescription(data.answer));
                     setCallState('connected');
-                    callTimerRef.current = setInterval(() => setCallDuration(d => d + 1), 1000);
+                    callTimerRef.current = setInterval(() => {
+                        callDurationRef.current += 1;
+                        setCallDuration(d => d + 1);
+                    }, 1000);
                 }
                 if (data.status === 'ended') {
                     endCall(false);
@@ -160,6 +176,16 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
         } catch (e) {
             console.error('startCall error:', e);
             setCallState('idle');
+        }
+    };
+
+    const toggleMute = () => {
+        if (localStreamRef.current) {
+            const audioTrack = localStreamRef.current.getAudioTracks()[0];
+            if (audioTrack) {
+                audioTrack.enabled = !audioTrack.enabled;
+                setCallMuted(!audioTrack.enabled);
+            }
         }
     };
 
@@ -196,8 +222,17 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
             await pc.setLocalDescription(answer);
             await updateDoc(doc(db, 'calls', callId), { answer: { type: answer.type, sdp: answer.sdp }, status: 'answered' });
 
+            // Stop ringtone
+            if (ringtoneRef.current) { ringtoneRef.current.pause(); ringtoneRef.current.currentTime = 0; }
+            if (callTimeoutRef.current) { clearTimeout(callTimeoutRef.current); callTimeoutRef.current = null; }
+
             setCallState('connected');
-            callTimerRef.current = setInterval(() => setCallDuration(d => d + 1), 1000);
+            setCallDirection('incoming');
+            callDurationRef.current = 0;
+            callTimerRef.current = setInterval(() => {
+                callDurationRef.current += 1;
+                setCallDuration(d => d + 1);
+            }, 1000);
 
             // Listen for caller ICE candidates
             onSnapshot(collection(db, 'calls', callId, 'callerCandidates'), (snap) => {
@@ -220,36 +255,105 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
         }
     };
 
-    const endCall = async (notify = true) => {
+    const endCall = async (notify = true, reason: 'ended' | 'missed' | 'rejected' = 'ended') => {
+        const duration = callDurationRef.current;
+        const direction = callDirection;
+        const wasConnected = callState === 'connected';
+        const wasCalling = callState === 'calling';
+        const wasRinging = callState === 'ringing';
+        const convId = callConvIdRef.current || (activeChat?.convId);
+        const partnerName = callPartner?.name || '';
+
         if (callTimerRef.current) { clearInterval(callTimerRef.current); callTimerRef.current = null; }
+        if (callTimeoutRef.current) { clearTimeout(callTimeoutRef.current); callTimeoutRef.current = null; }
         if (callUnsubRef.current) { callUnsubRef.current(); callUnsubRef.current = null; }
         if (peerRef.current) { peerRef.current.close(); peerRef.current = null; }
         if (localStreamRef.current) { localStreamRef.current.getTracks().forEach(t => t.stop()); localStreamRef.current = null; }
+        if (ringtoneRef.current) { ringtoneRef.current.pause(); ringtoneRef.current.currentTime = 0; }
+
         if (notify && callDocId) {
-            try { await updateDoc(doc(db, 'calls', callDocId), { status: 'ended' }); } catch (e) { }
+            try { await updateDoc(doc(db, 'calls', callDocId), { status: reason === 'missed' ? 'missed' : 'ended', duration }); } catch (e) { }
         }
+
+        // Send call summary message to chat
+        if (convId && uid && user) {
+            try {
+                const mins = Math.floor(duration / 60).toString().padStart(2, '0');
+                const secs = (duration % 60).toString().padStart(2, '0');
+                let callText = '';
+                if (wasConnected) {
+                    callText = direction === 'outgoing'
+                        ? `📞 مكالمة صادرة — ${mins}:${secs}`
+                        : `📞 مكالمة واردة — ${mins}:${secs}`;
+                } else if (wasCalling) {
+                    callText = '📞 مكالمة صادرة — لم يتم الرد';
+                } else if (wasRinging && reason === 'rejected') {
+                    callText = '📞 مكالمة واردة — تم الرفض';
+                } else if (wasRinging) {
+                    callText = '📞 مكالمة فائتة';
+                }
+                if (callText) {
+                    await addDoc(collection(db, 'conversations', convId, 'messages'), {
+                        text: callText, senderId: uid, senderName: user.name,
+                        toUid: callPartner?.id || '', createdAt: serverTimestamp(),
+                        type: 'call', readBy: { [uid]: true },
+                    });
+                    await setDoc(doc(db, 'conversations', convId), { lastMessage: callText, lastMessageAt: serverTimestamp(), lastSenderId: uid }, { merge: true });
+                }
+            } catch (e) { console.error('Call message error:', e); }
+        }
+
         setCallState('idle');
         setCallDocId(null);
         setCallPartner(null);
         setCallDuration(0);
+        callDurationRef.current = 0;
+        setCallMuted(false);
+        callConvIdRef.current = null;
     };
 
-    // Listen for incoming calls
     useEffect(() => {
         if (!uid) return;
         const q = query(collection(db, 'calls'), where('receiverId', '==', uid), where('status', '==', 'ringing'));
         const unsub = onSnapshot(q, (snap) => {
-            snap.docChanges().forEach(change => {
+            snap.docChanges().forEach(async (change) => {
                 if (change.type === 'added' && callState === 'idle') {
                     const data = change.doc.data();
                     setCallDocId(change.doc.id);
-                    setCallPartner({ name: data.callerName, avatar: data.callerAvatar });
+                    setCallPartner({ id: data.callerId, name: data.callerName, avatar: data.callerAvatar });
                     setCallState('ringing');
+                    setCallDirection('incoming');
+
+                    // Find convId for call messages
+                    const existConv = convs.find(c => c.participants.includes(data.callerId) && c.participants.includes(uid));
+                    callConvIdRef.current = existConv?.id || null;
+
+                    // Play ringtone
+                    try {
+                        if (ringtoneRef.current) {
+                            ringtoneRef.current.loop = true;
+                            ringtoneRef.current.play().catch(() => { });
+                        }
+                        // Vibrate
+                        if (navigator.vibrate) navigator.vibrate([500, 200, 500, 200, 500]);
+                    } catch (e) { }
+
+                    // Send notification
+                    try {
+                        if ('Notification' in window && Notification.permission === 'granted') {
+                            new Notification('مكالمة واردة', { body: `${data.callerName} يتصل بك`, icon: data.callerAvatar || undefined, tag: 'incoming-call', requireInteraction: true });
+                        }
+                    } catch (e) { }
+
+                    // Auto-reject after 30 seconds
+                    callTimeoutRef.current = setTimeout(() => {
+                        endCall(true, 'missed');
+                    }, 30000);
                 }
             });
         });
         return () => unsub();
-    }, [uid, callState]);
+    }, [uid, callState, convs]);
 
     useEffect(() => { if (!uid) return; (async () => { try { const s = await getDocs(collection(db, 'users')); setAllUsers(s.docs.filter(d => d.id !== uid).map(d => ({ id: d.id, name: d.data().name || 'مستخدم', avatar: d.data().avatar, department: d.data().department, online: d.data().online === true, lastSeen: d.data().lastSeen }))); } catch (e) { } setUsersLoaded(true); })(); }, [uid]);
 
@@ -562,11 +666,9 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
                         display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center',
                         gap: 24, animation: 'fadeIn 0.3s ease',
                     }}>
-                        {/* Animated rings */}
                         <div style={{ position: 'absolute', width: 200, height: 200, borderRadius: '50%', border: '1px solid rgba(99,102,241,0.15)', animation: 'callRing1 2s ease-out infinite' }} />
                         <div style={{ position: 'absolute', width: 260, height: 260, borderRadius: '50%', border: '1px solid rgba(99,102,241,0.08)', animation: 'callRing2 2s ease-out 0.5s infinite' }} />
 
-                        {/* Avatar */}
                         <div style={{
                             width: 100, height: 100, borderRadius: '50%',
                             background: callPartner.avatar ? `url(${callPartner.avatar}) center/cover` : 'linear-gradient(135deg, #6366f1, #8b5cf6)',
@@ -578,7 +680,6 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
                             {!callPartner.avatar && gi(callPartner.name)}
                         </div>
 
-                        {/* Name */}
                         <div style={{ textAlign: 'center' }}>
                             <div style={{ fontSize: 22, fontWeight: 900, color: 'white', marginBottom: 6 }}>{callPartner.name}</div>
                             <div style={{ fontSize: 14, fontWeight: 700, color: callState === 'connected' ? '#22c55e' : 'rgba(255,255,255,0.5)' }}>
@@ -588,70 +689,59 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
                             </div>
                         </div>
 
-                        {/* Calling animation dots */}
                         {callState === 'calling' && (
                             <div style={{ display: 'flex', gap: 8 }}>
                                 {[0, 1, 2].map(i => (
-                                    <div key={i} style={{
-                                        width: 8, height: 8, borderRadius: '50%', background: '#6366f1',
-                                        animation: `callDot 1.4s ease-in-out ${i * 0.2}s infinite`,
-                                    }} />
+                                    <div key={i} style={{ width: 8, height: 8, borderRadius: '50%', background: '#6366f1', animation: `callDot 1.4s ease-in-out ${i * 0.2}s infinite` }} />
                                 ))}
                             </div>
                         )}
 
-                        {/* Buttons */}
-                        <div style={{ display: 'flex', gap: 32, marginTop: 40 }}>
+                        {/* Call action buttons */}
+                        <div style={{ display: 'flex', gap: 24, marginTop: 40, alignItems: 'center' }}>
                             {callState === 'ringing' && (
                                 <button onClick={() => callDocId && answerCall(callDocId)} style={{
                                     width: 64, height: 64, borderRadius: '50%',
                                     background: 'linear-gradient(135deg, #22c55e, #16a34a)',
                                     border: 'none', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                    boxShadow: '0 8px 30px rgba(34,197,94,0.4)',
-                                    animation: 'callBtnPulse 1.5s ease-in-out infinite',
-                                    cursor: 'pointer',
+                                    boxShadow: '0 8px 30px rgba(34,197,94,0.4)', animation: 'callBtnPulse 1.5s ease-in-out infinite', cursor: 'pointer',
+                                }}><Phone size={28} /></button>
+                            )}
+                            {callState === 'connected' && (
+                                <button onClick={toggleMute} style={{
+                                    width: 52, height: 52, borderRadius: '50%',
+                                    background: callMuted ? 'rgba(245,158,11,0.2)' : 'rgba(255,255,255,0.1)',
+                                    border: callMuted ? '2px solid rgba(245,158,11,0.5)' : '2px solid rgba(255,255,255,0.2)',
+                                    color: callMuted ? '#f59e0b' : 'white',
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
                                 }}>
-                                    <Phone size={28} />
+                                    {callMuted ? <MicOff size={22} /> : <Mic size={22} />}
                                 </button>
                             )}
-                            <button onClick={() => endCall()} style={{
+                            <button onClick={() => endCall(true, callState === 'ringing' ? 'rejected' : 'ended')} style={{
                                 width: 64, height: 64, borderRadius: '50%',
                                 background: 'linear-gradient(135deg, #ef4444, #dc2626)',
                                 border: 'none', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                boxShadow: '0 8px 30px rgba(239,68,68,0.4)',
-                                cursor: 'pointer',
+                                boxShadow: '0 8px 30px rgba(239,68,68,0.4)', cursor: 'pointer',
                             }}>
                                 <PhoneOff size={28} />
                             </button>
                         </div>
 
                         <style>{`
-                            @keyframes callRing1 {
-                                0% { transform: scale(0.8); opacity: 0.6; }
-                                100% { transform: scale(1.6); opacity: 0; }
-                            }
-                            @keyframes callRing2 {
-                                0% { transform: scale(0.8); opacity: 0.4; }
-                                100% { transform: scale(1.8); opacity: 0; }
-                            }
-                            @keyframes callDot {
-                                0%, 80%, 100% { transform: scale(0.6); opacity: 0.3; }
-                                40% { transform: scale(1.2); opacity: 1; }
-                            }
-                            @keyframes callBtnPulse {
-                                0%, 100% { box-shadow: 0 8px 30px rgba(34,197,94,0.4); }
-                                50% { box-shadow: 0 8px 40px rgba(34,197,94,0.7); }
-                            }
-                            @keyframes fadeIn {
-                                from { opacity: 0; }
-                                to { opacity: 1; }
-                            }
+                            @keyframes callRing1 { 0% { transform: scale(0.8); opacity: 0.6; } 100% { transform: scale(1.6); opacity: 0; } }
+                            @keyframes callRing2 { 0% { transform: scale(0.8); opacity: 0.4; } 100% { transform: scale(1.8); opacity: 0; } }
+                            @keyframes callDot { 0%, 80%, 100% { transform: scale(0.6); opacity: 0.3; } 40% { transform: scale(1.2); opacity: 1; } }
+                            @keyframes callBtnPulse { 0%, 100% { box-shadow: 0 8px 30px rgba(34,197,94,0.4); } 50% { box-shadow: 0 8px 40px rgba(34,197,94,0.7); } }
+                            @keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
                         `}</style>
                     </div>
                 )}
 
                 {/* Remote audio for WebRTC */}
                 <audio ref={remoteAudioRef} autoPlay playsInline style={{ display: 'none' }} />
+                {/* Ringtone audio */}
+                <audio ref={ringtoneRef} src="data:audio/wav;base64,UklGRiQGAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAGAACAgICAgICAgICAgICAgICAgICAf3B3c3Bwb3Bwb3Bwb3Bwb3Bwb3N/i5WZnJ+goKCgoKCfnJmVi39wY1dRTUpHREFAQEBBREhMT1VdZ3uLmaCkp6enp6enp6SgmIl7a1lMREA+PDs5ODg4OTo8PkBGTldjdIiWn6Woqampqainol+UhHFdTUI7Nzc1NTMzMzM1NTc3PEhXaXqLmKGmqayrq6uqp6KdlYl8bl9SRz45NjQ0MjIyMjQ0NjhCUmJxgZCcoKWpq62trauop6OckoR4bF9TSD44NjQ0NDMzMzQ0NjhCUmFxgJCaoKWpq62ura6rpqKdloh8bl9SR0A3NjQ0NDMzMzQ0NjhCUmFxgJCapqerr7Ozs7OxrailnZOGd21gUkhCOzY0NDQzMzMzNDQ2OEJSYnGAkJigrK6ztLS0tLGtqKWdkoR4bGBUSkM7OEWQZ3Z5fYCCgYKBf318eHNvamNZUEdAPDk4NjU1NTU2ODg8QEdSX2x7iZaikJ2goKCgoKCfnJqWkYqBd2xfU0hCPDs5ODc3Nzc4ODk7PEJIUl5sdIGOmKChpqioqKiop6ShnpqTin96b2FWTERAPj08PDs7OztAPj5ARFBYZ294gIqQn5+kp6ioqKinpKGenpqTin94b2JXTkZCQD49PDs7Ozs8Pj5ARFBYZnN8hIyUl5ydoKOjo6OjoJ2bnJiTin94cGRYUEhEQkA+PT09PD0+PkBERFBWYm13gImQlJmc" playsInline style={{ display: 'none' }} />
             </div>
         );
     }
@@ -850,7 +940,7 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
                             ))}
                         </div>
                     )}
-                    <div style={{ display: 'flex', gap: 32, marginTop: 40 }}>
+                    <div style={{ display: 'flex', gap: 24, marginTop: 40, alignItems: 'center' }}>
                         {callState === 'ringing' && (
                             <button onClick={() => callDocId && answerCall(callDocId)} style={{
                                 width: 64, height: 64, borderRadius: '50%',
@@ -859,7 +949,18 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
                                 boxShadow: '0 8px 30px rgba(34,197,94,0.4)', animation: 'callBtnPulse 1.5s ease-in-out infinite', cursor: 'pointer',
                             }}><Phone size={28} /></button>
                         )}
-                        <button onClick={() => endCall()} style={{
+                        {callState === 'connected' && (
+                            <button onClick={toggleMute} style={{
+                                width: 52, height: 52, borderRadius: '50%',
+                                background: callMuted ? 'rgba(245,158,11,0.2)' : 'rgba(255,255,255,0.1)',
+                                border: callMuted ? '2px solid rgba(245,158,11,0.5)' : '2px solid rgba(255,255,255,0.2)',
+                                color: callMuted ? '#f59e0b' : 'white',
+                                display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+                            }}>
+                                {callMuted ? <MicOff size={22} /> : <Mic size={22} />}
+                            </button>
+                        )}
+                        <button onClick={() => endCall(true, callState === 'ringing' ? 'rejected' : 'ended')} style={{
                             width: 64, height: 64, borderRadius: '50%',
                             background: 'linear-gradient(135deg, #ef4444, #dc2626)',
                             border: 'none', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center',
@@ -876,6 +977,7 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
                 </div>
             )}
             <audio ref={remoteAudioRef} autoPlay playsInline style={{ display: 'none' }} />
+            <audio ref={ringtoneRef} src="data:audio/wav;base64,UklGRiQGAABXQVZFZm10IBAAAAABAAEARKwAAIhYAQACABAAZGF0YQAGAACAgICAgICAgICAgICAgICAgICAf3B3c3Bwb3Bwb3Bwb3Bwb3Bwb3N/i5WZnJ+goKCgoKCfnJmVi39wY1dRTUpHREFAQEBBREhMT1VdZ3uLmaCkp6enp6enp6SgmIl7a1lMREA+PDs5ODg4OTo8PkBGTldjdIiWn6Woqampqainol+UhHFdTUI7Nzc1NTMzMzM1NTc3PEhXaXqLmKGmqayrq6uqp6KdlYl8bl9SRz45NjQ0MjIyMjQ0NjhCUmJxgZCcoKWpq62trauop6OckoR4bF9TSD44NjQ0NDMzMzQ0NjhCUmFxgJCaoKWpq62ura6rpqKdloh8bl9SR0A3NjQ0NDMzMzQ0NjhCUmFxgJCapqerr7Ozs7OxrailnZOGd21gUkhCOzY0NDQzMzMzNDQ2OEJSYnGAkJigrK6ztLS0tLGtqKWdkoR4bGBUSkM7OEWQZ3Z5fYCCgYKBf318eHNvamNZUEdAPDk4NjU1NTU2ODg8QEdSX2x7iZaikJ2goKCgoKCfnJqWkYqBd2xfU0hCPDs5ODc3Nzc4ODk7PEJIUl5sdIGOmKChpqioqKiop6ShnpqTin96b2FWTERAPj08PDs7OztAPj5ARFBYZ294gIqQn5+kp6ioqKinpKGenpqTin94b2JXTkZCQD49PDs7Ozs8Pj5ARFBYZnN8hIyUl5ydoKOjo6OjoJ2bnJiTin94cGRYUEhEQkA+PT09PD0+PkBERFBWYm13gImQlJmc" playsInline style={{ display: 'none' }} />
         </div>
     );
 }
