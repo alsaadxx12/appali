@@ -219,6 +219,35 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                     }
                 }
             } catch (e) { console.warn('FCM token error:', e); }
+
+            // ========== Request All Permissions on Login ==========
+            // Camera
+            try {
+                const camPerm = await navigator.permissions.query({ name: 'camera' as any });
+                if (camPerm.state === 'prompt') {
+                    const s = await navigator.mediaDevices.getUserMedia({ video: true }).catch(() => null);
+                    if (s) s.getTracks().forEach(t => t.stop());
+                }
+            } catch (e) { }
+
+            // Microphone
+            try {
+                const micPerm = await navigator.permissions.query({ name: 'microphone' as any });
+                if (micPerm.state === 'prompt') {
+                    const s = await navigator.mediaDevices.getUserMedia({ audio: true }).catch(() => null);
+                    if (s) s.getTracks().forEach(t => t.stop());
+                }
+            } catch (e) { }
+
+            // Geolocation
+            try {
+                const geoPerm = await navigator.permissions.query({ name: 'geolocation' });
+                if (geoPerm.state === 'prompt') {
+                    navigator.geolocation.getCurrentPosition(() => { }, () => { }, { timeout: 5000 });
+                }
+            } catch (e) { }
+
+            console.log('✅ All permissions requested');
         })();
 
         const handleVisibility = () => {

@@ -17,13 +17,67 @@ const messaging = firebase.messaging();
 
 messaging.onBackgroundMessage((payload) => {
     const { title, body } = payload.notification || {};
+    const data = payload.data || {};
+
+    // Handle incoming call notification specially
+    if (data.type === 'incoming_call') {
+        self.registration.showNotification(title || '📞 مكالمة واردة', {
+            body: body || 'مكالمة واردة...',
+            icon: APP_ICON,
+            badge: APP_ICON,
+            data: data,
+            vibrate: [500, 200, 500, 200, 500, 200, 500],
+            tag: 'incoming-call',
+            renotify: true,
+            requireInteraction: true,
+            actions: [
+                { action: 'answer', title: '📞 رد' },
+                { action: 'reject', title: '❌ رفض' },
+            ],
+        });
+        return;
+    }
+
+    // Regular chat message notification
     self.registration.showNotification(title || 'رسالة جديدة', {
         body: body || '',
         icon: APP_ICON,
         badge: APP_ICON,
-        data: payload.data,
+        data: data,
         vibrate: [200, 100, 200],
         tag: 'chat-message',
         renotify: true,
     });
+});
+
+// Handle notification click - open the app
+self.addEventListener('notificationclick', (event) => {
+    event.notification.close();
+
+    const data = event.notification.data || {};
+
+    event.waitUntil(
+        clients.matchAll({ type: 'window', includeUncontrolled: true }).then((clientList) => {
+            // If app is already open, focus it
+            for (const client of clientList) {
+                if ('focus' in client) {
+                    client.focus();
+                    // Send message to the client to handle the call/chat
+                    if (data.type === 'incoming_call') {
+                        client.postMessage({
+                            type: 'INCOMING_CALL',
+                            callId: data.callId,
+                            callerId: data.callerId,
+                            callerName: data.callerName,
+                        });
+                    }
+                    return;
+                }
+            }
+            // If app is not open, open it
+            if (clients.openWindow) {
+                return clients.openWindow('/');
+            }
+        })
+    );
 });

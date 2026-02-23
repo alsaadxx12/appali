@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ArrowRight, Send, Search, Users, MessageCircle, Loader2, Smile, Paperclip, Image as ImageIcon, X, Trash2, Edit3, Check, Clock, Download, FileText, Camera, EyeOff, CheckCheck, MapPin, Archive, UserCircle, Phone, PhoneOff, MicOff, Mic } from 'lucide-react';
+import { ArrowRight, SendHorizontal, Search, Users, MessageCircle, Loader2, Smile, Paperclip, Image as ImageIcon, X, Trash2, Edit3, Check, Clock, Download, FileText, Camera, EyeOff, CheckCheck, MapPin, Archive, ArchiveRestore, UserCircle, Phone, PhoneOff, MicOff, Mic, Volume2, VolumeX } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { db, storage } from '../firebase';
 import { collection, doc, getDocs, getDoc, addDoc, query, where, onSnapshot, serverTimestamp, Timestamp, setDoc, updateDoc, deleteDoc } from 'firebase/firestore';
@@ -7,7 +7,7 @@ import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 
 interface ChatUser { id: string; name: string; avatar?: string; department?: string; online?: boolean; lastSeen?: Timestamp; }
 interface Message { id: string; text: string; senderId: string; senderName: string; createdAt: Timestamp | null; edited?: boolean; deleted?: boolean; type?: 'text' | 'image' | 'file' | 'location'; fileUrl?: string; fileName?: string; fileSize?: string; disappearAfter?: number; readBy?: Record<string, boolean>; location?: { lat: number; lng: number }; }
-interface Conversation { id: string; participants: string[]; participantNames: Record<string, string>; participantAvatars?: Record<string, string>; lastMessage?: string; lastMessageAt?: Timestamp; readBy?: Record<string, Timestamp>; lastSenderId?: string; }
+interface Conversation { id: string; participants: string[]; participantNames: Record<string, string>; participantAvatars?: Record<string, string>; lastMessage?: string; lastMessageAt?: Timestamp; readBy?: Record<string, Timestamp>; lastSenderId?: string; archived?: Record<string, boolean>; }
 interface Props { onBack: () => void; onChatActive?: (active: boolean) => void; }
 
 const EMOJI_CATS = [
@@ -68,6 +68,7 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
     const [showBgPicker, setShowBgPicker] = useState(false);
     const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
     const longPressTimer = useRef<any>(null);
+    const [chatFilter, setChatFilter] = useState<'all' | 'unread' | 'archived'>('all');
 
     // ========== Voice Call State ==========
     const [callState, setCallState] = useState<'idle' | 'calling' | 'ringing' | 'connected'>('idle');
@@ -76,6 +77,7 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
     const [callDuration, setCallDuration] = useState(0);
     const [callMuted, setCallMuted] = useState(false);
     const [callDirection, setCallDirection] = useState<'outgoing' | 'incoming'>('outgoing');
+    const [speakerOn, setSpeakerOn] = useState(false);
     const callConvIdRef = useRef<string | null>(null);
     const peerRef = useRef<RTCPeerConnection | null>(null);
     const localStreamRef = useRef<MediaStream | null>(null);
@@ -189,8 +191,36 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
         }
     };
 
+    const toggleSpeaker = () => {
+        if (remoteAudioRef.current) {
+            const audio = remoteAudioRef.current as any;
+            if (typeof audio.setSinkId === 'function') {
+                audio.setSinkId(speakerOn ? '' : 'default').catch(() => { });
+            }
+        }
+        setSpeakerOn(!speakerOn);
+    };
+
+    // Archive / Unarchive conversation
+    const archiveConv = async (convId: string) => {
+        if (!uid) return;
+        await updateDoc(doc(db, 'conversations', convId), { [`archived.${uid}`]: true }).catch(() => { });
+        setLongPressConv(null);
+    };
+    const unarchiveConv = async (convId: string) => {
+        if (!uid) return;
+        await updateDoc(doc(db, 'conversations', convId), { [`archived.${uid}`]: false }).catch(() => { });
+        setLongPressConv(null);
+    };
+
     const answerCall = async (callId: string) => {
         if (!uid) return;
+
+        // ========== INSTANT feedback: stop ringtone + vibration ==========
+        if (ringtoneRef.current) { ringtoneRef.current.pause(); ringtoneRef.current.currentTime = 0; }
+        if (callTimeoutRef.current) { clearTimeout(callTimeoutRef.current); callTimeoutRef.current = null; }
+        if (navigator.vibrate) navigator.vibrate(0); // cancel vibration
+
         try {
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
             localStreamRef.current = stream;
@@ -220,11 +250,9 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
             await pc.setRemoteDescription(new RTCSessionDescription(callData.offer));
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
-            await updateDoc(doc(db, 'calls', callId), { answer: { type: answer.type, sdp: answer.sdp }, status: 'answered' });
 
-            // Stop ringtone
-            if (ringtoneRef.current) { ringtoneRef.current.pause(); ringtoneRef.current.currentTime = 0; }
-            if (callTimeoutRef.current) { clearTimeout(callTimeoutRef.current); callTimeoutRef.current = null; }
+            // Don't await this - fire and forget for faster UI
+            updateDoc(doc(db, 'calls', callId), { answer: { type: answer.type, sdp: answer.sdp }, status: 'answered' }).catch(() => { });
 
             setCallState('connected');
             setCallDirection('incoming');
@@ -255,15 +283,18 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
         }
     };
 
-    const endCall = async (notify = true, reason: 'ended' | 'missed' | 'rejected' = 'ended') => {
+    const endCall = (notify = true, reason: 'ended' | 'missed' | 'rejected' = 'ended') => {
+        // Capture all needed data BEFORE resetting state
         const duration = callDurationRef.current;
         const direction = callDirection;
         const wasConnected = callState === 'connected';
         const wasCalling = callState === 'calling';
         const wasRinging = callState === 'ringing';
         const convId = callConvIdRef.current || (activeChat?.convId);
-        const partnerName = callPartner?.name || '';
+        const savedCallDocId = callDocId;
+        const savedPartnerId = callPartner?.id || '';
 
+        // ========== INSTANT UI RESET ==========
         if (callTimerRef.current) { clearInterval(callTimerRef.current); callTimerRef.current = null; }
         if (callTimeoutRef.current) { clearTimeout(callTimeoutRef.current); callTimeoutRef.current = null; }
         if (callUnsubRef.current) { callUnsubRef.current(); callUnsubRef.current = null; }
@@ -271,45 +302,47 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
         if (localStreamRef.current) { localStreamRef.current.getTracks().forEach(t => t.stop()); localStreamRef.current = null; }
         if (ringtoneRef.current) { ringtoneRef.current.pause(); ringtoneRef.current.currentTime = 0; }
 
-        if (notify && callDocId) {
-            try { await updateDoc(doc(db, 'calls', callDocId), { status: reason === 'missed' ? 'missed' : 'ended', duration }); } catch (e) { }
-        }
-
-        // Send call summary message to chat
-        if (convId && uid && user) {
-            try {
-                const mins = Math.floor(duration / 60).toString().padStart(2, '0');
-                const secs = (duration % 60).toString().padStart(2, '0');
-                let callText = '';
-                if (wasConnected) {
-                    callText = direction === 'outgoing'
-                        ? `📞 مكالمة صادرة — ${mins}:${secs}`
-                        : `📞 مكالمة واردة — ${mins}:${secs}`;
-                } else if (wasCalling) {
-                    callText = '📞 مكالمة صادرة — لم يتم الرد';
-                } else if (wasRinging && reason === 'rejected') {
-                    callText = '📞 مكالمة واردة — تم الرفض';
-                } else if (wasRinging) {
-                    callText = '📞 مكالمة فائتة';
-                }
-                if (callText) {
-                    await addDoc(collection(db, 'conversations', convId, 'messages'), {
-                        text: callText, senderId: uid, senderName: user.name,
-                        toUid: callPartner?.id || '', createdAt: serverTimestamp(),
-                        type: 'call', readBy: { [uid]: true },
-                    });
-                    await setDoc(doc(db, 'conversations', convId), { lastMessage: callText, lastMessageAt: serverTimestamp(), lastSenderId: uid }, { merge: true });
-                }
-            } catch (e) { console.error('Call message error:', e); }
-        }
-
         setCallState('idle');
         setCallDocId(null);
         setCallPartner(null);
         setCallDuration(0);
         callDurationRef.current = 0;
         setCallMuted(false);
+        setSpeakerOn(false);
         callConvIdRef.current = null;
+
+        // ========== BACKGROUND Firestore writes (no await, fire-and-forget) ==========
+        (async () => {
+            if (notify && savedCallDocId) {
+                try { await updateDoc(doc(db, 'calls', savedCallDocId), { status: reason === 'missed' ? 'missed' : 'ended', duration }); } catch (e) { }
+            }
+            if (convId && uid && user) {
+                try {
+                    const mins = Math.floor(duration / 60).toString().padStart(2, '0');
+                    const secs = (duration % 60).toString().padStart(2, '0');
+                    let callText = '';
+                    if (wasConnected) {
+                        callText = direction === 'outgoing'
+                            ? `📞 مكالمة صادرة — ${mins}:${secs}`
+                            : `📞 مكالمة واردة — ${mins}:${secs}`;
+                    } else if (wasCalling) {
+                        callText = '📞 مكالمة صادرة — لم يتم الرد';
+                    } else if (wasRinging && reason === 'rejected') {
+                        callText = '📞 مكالمة واردة — تم الرفض';
+                    } else if (wasRinging) {
+                        callText = '📞 مكالمة فائتة';
+                    }
+                    if (callText) {
+                        await addDoc(collection(db, 'conversations', convId, 'messages'), {
+                            text: callText, senderId: uid, senderName: user.name,
+                            toUid: savedPartnerId, createdAt: serverTimestamp(),
+                            type: 'call', readBy: { [uid]: true },
+                        });
+                        await setDoc(doc(db, 'conversations', convId), { lastMessage: callText, lastMessageAt: serverTimestamp(), lastSenderId: uid }, { merge: true });
+                    }
+                } catch (e) { console.error('Call message error:', e); }
+            }
+        })();
     };
 
     useEffect(() => {
@@ -647,7 +680,7 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
                             <button onClick={() => { setShowEmoji(!showEmoji); setShowAttach(false); }} style={{ padding: 6, color: showEmoji ? 'var(--accent-amber)' : 'var(--text-muted)', flexShrink: 0 }}><Smile size={19} /></button>
                             <textarea ref={textareaRef} placeholder="اكتب شيئاً جميل ..." value={editMsg ? editTxt : newMsg} onChange={e => { editMsg ? setEditTxt(e.target.value) : setNewMsg(e.target.value); const ta = textareaRef.current; if (ta) { ta.style.height = '32px'; ta.style.height = Math.min(ta.scrollHeight, 100) + 'px'; } }} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); editMsg ? doEdit() : sendMessage(); const ta = textareaRef.current; if (ta) ta.style.height = '32px'; } }} style={{ flex: 1, background: 'transparent', border: 'none', outline: 'none', padding: '7px 4px', color: 'var(--text-primary)', fontSize: 13.5, fontWeight: 700, fontFamily: 'var(--font-arabic)', resize: 'none', height: 32, minHeight: 32, maxHeight: 100, lineHeight: '18px', overflow: 'auto' }} rows={1} />
                         </div>
-                        <button onClick={editMsg ? doEdit : () => sendMessage()} disabled={editMsg ? !editTxt.trim() : (!newMsg.trim() && !uploading)} style={{ width: 38, height: 38, borderRadius: 14, background: (newMsg.trim() || editTxt.trim()) ? 'linear-gradient(135deg, #4f46e5, #3b82f6)' : 'var(--bg-glass)', color: (newMsg.trim() || editTxt.trim()) ? 'white' : 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: (newMsg.trim() || editTxt.trim()) ? '0 8px 16px rgba(59,130,246,0.3)' : 'none', transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)', transform: (newMsg.trim() || editTxt.trim()) ? 'scale(1.05)' : 'scale(1)', flexShrink: 0 }}>{editMsg ? <Check size={19} /> : <Send size={19} style={{ transform: 'rotate(180deg)', marginLeft: -2 }} />}</button>
+                        <button onClick={editMsg ? doEdit : () => sendMessage()} disabled={editMsg ? !editTxt.trim() : (!newMsg.trim() && !uploading)} style={{ width: 38, height: 38, borderRadius: 14, background: (newMsg.trim() || editTxt.trim()) ? 'linear-gradient(135deg, #4f46e5, #3b82f6)' : 'var(--bg-glass)', color: (newMsg.trim() || editTxt.trim()) ? 'white' : 'var(--text-muted)', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: (newMsg.trim() || editTxt.trim()) ? '0 8px 16px rgba(59,130,246,0.3)' : 'none', transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)', transform: (newMsg.trim() || editTxt.trim()) ? 'scale(1.05)' : 'scale(1)', flexShrink: 0 }}>{editMsg ? <Check size={19} /> : <SendHorizontal size={19} style={{ transform: 'scaleX(-1)', marginLeft: -1 }} />}</button>
                     </div>
                 </div>
 
@@ -708,15 +741,26 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
                                 }}><Phone size={28} /></button>
                             )}
                             {callState === 'connected' && (
-                                <button onClick={toggleMute} style={{
-                                    width: 52, height: 52, borderRadius: '50%',
-                                    background: callMuted ? 'rgba(245,158,11,0.2)' : 'rgba(255,255,255,0.1)',
-                                    border: callMuted ? '2px solid rgba(245,158,11,0.5)' : '2px solid rgba(255,255,255,0.2)',
-                                    color: callMuted ? '#f59e0b' : 'white',
-                                    display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
-                                }}>
-                                    {callMuted ? <MicOff size={22} /> : <Mic size={22} />}
-                                </button>
+                                <>
+                                    <button onClick={toggleMute} style={{
+                                        width: 52, height: 52, borderRadius: '50%',
+                                        background: callMuted ? 'rgba(245,158,11,0.2)' : 'rgba(255,255,255,0.1)',
+                                        border: callMuted ? '2px solid rgba(245,158,11,0.5)' : '2px solid rgba(255,255,255,0.2)',
+                                        color: callMuted ? '#f59e0b' : 'white',
+                                        display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+                                    }}>
+                                        {callMuted ? <MicOff size={22} /> : <Mic size={22} />}
+                                    </button>
+                                    <button onClick={toggleSpeaker} style={{
+                                        width: 52, height: 52, borderRadius: '50%',
+                                        background: speakerOn ? 'rgba(59,130,246,0.2)' : 'rgba(255,255,255,0.1)',
+                                        border: speakerOn ? '2px solid rgba(59,130,246,0.5)' : '2px solid rgba(255,255,255,0.2)',
+                                        color: speakerOn ? '#3b82f6' : 'white',
+                                        display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+                                    }}>
+                                        {speakerOn ? <Volume2 size={22} /> : <VolumeX size={22} />}
+                                    </button>
+                                </>
                             )}
                             <button onClick={() => endCall(true, callState === 'ringing' ? 'rejected' : 'ended')} style={{
                                 width: 64, height: 64, borderRadius: '50%',
@@ -801,6 +845,25 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
                 />
             </div>
 
+            {/* Filter Tabs */}
+            <div style={{ display: 'flex', gap: 8, marginBottom: 16, padding: '0 4px', overflowX: 'auto', scrollbarWidth: 'none' }}>
+                {(['all', 'unread', 'archived'] as const).map(f => {
+                    const labels = { all: 'الكل', unread: 'غير مقروءة', archived: 'الأرشيف' };
+                    const icons = { all: <MessageCircle size={14} />, unread: <Clock size={14} />, archived: <Archive size={14} /> };
+                    return (
+                        <button key={f} onClick={() => setChatFilter(f)} style={{
+                            display: 'flex', alignItems: 'center', gap: 6, padding: '8px 16px', borderRadius: 14,
+                            background: chatFilter === f ? 'linear-gradient(135deg, #4f46e5, #3b82f6)' : 'var(--bg-glass)',
+                            color: chatFilter === f ? 'white' : 'var(--text-secondary)',
+                            border: chatFilter === f ? 'none' : '1px solid var(--border-glass)',
+                            fontSize: 12, fontWeight: 800, whiteSpace: 'nowrap',
+                            boxShadow: chatFilter === f ? '0 4px 12px rgba(79,70,229,0.3)' : 'none',
+                            transition: 'all 0.2s',
+                        }}>{icons[f]}{labels[f]}</button>
+                    );
+                })}
+            </div>
+
             {/* Conversations List */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                 {loading ? (
@@ -811,7 +874,18 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
                         <div style={{ fontSize: 16, fontWeight: 900, marginBottom: 4 }}>لا توجد محادثات</div>
                         <div style={{ fontSize: 12, color: 'var(--text-muted)', fontWeight: 600 }}>ابدأ محادثة جديدة مع أحد زملائك</div>
                     </div>
-                ) : convs.filter(c => !search.trim() || (c.participantNames?.[c.participants.find(p => p !== uid) || ''] || '').includes(search)).map(c => {
+                ) : convs.filter(c => {
+                    const oid = c.participants.find(p => p !== uid) || '';
+                    const on = c.participantNames?.[oid] || '';
+                    const isArchived = c.archived?.[uid] === true;
+                    const rd = (c as any).readBy || {}, lr = rd[uid], lm = c.lastMessageAt, ls = (c as any).lastSenderId;
+                    const unread = lm && ls && ls !== uid && (!lr || (lr.toMillis && lm.toMillis && lr.toMillis() < lm.toMillis()));
+
+                    if (search.trim() && !on.includes(search)) return false;
+                    if (chatFilter === 'archived') return isArchived;
+                    if (chatFilter === 'unread') return !isArchived && unread;
+                    return !isArchived; // 'all' hides archived
+                }).map(c => {
                     const oid = c.participants.find(p => p !== uid) || '';
                     const on = c.participantNames?.[oid] || 'مستخدم';
                     const av = (c as any).participantAvatars?.[oid] || allUsers.find(u => u.id === oid)?.avatar;
@@ -857,7 +931,11 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
                             {longPressConv === c.id && (
                                 <div className="cm" style={{ top: '50%', right: 16, transform: 'translateY(-50%)', zIndex: 100 }} onClick={e => e.stopPropagation()}>
                                     <button className="ci dl" onClick={() => { setDeleteConfirm(c.id); setLongPressConv(null); }}><Trash2 size={16} />حذف المحادثة</button>
-                                    <button className="ci" onClick={() => { setLongPressConv(null); }}><Archive size={16} />أرشفة</button>
+                                    {c.archived?.[uid] ? (
+                                        <button className="ci" onClick={() => unarchiveConv(c.id)}><ArchiveRestore size={16} />إلغاء الأرشفة</button>
+                                    ) : (
+                                        <button className="ci" onClick={() => archiveConv(c.id)}><Archive size={16} />أرشفة</button>
+                                    )}
                                     <button className="ci" onClick={() => { setShowBgPicker(true); setLongPressConv(null); }}><ImageIcon size={16} />تغيير الخلفية</button>
                                 </div>
                             )}
@@ -950,15 +1028,26 @@ export default function ChatPage({ onBack, onChatActive }: Props) {
                             }}><Phone size={28} /></button>
                         )}
                         {callState === 'connected' && (
-                            <button onClick={toggleMute} style={{
-                                width: 52, height: 52, borderRadius: '50%',
-                                background: callMuted ? 'rgba(245,158,11,0.2)' : 'rgba(255,255,255,0.1)',
-                                border: callMuted ? '2px solid rgba(245,158,11,0.5)' : '2px solid rgba(255,255,255,0.2)',
-                                color: callMuted ? '#f59e0b' : 'white',
-                                display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
-                            }}>
-                                {callMuted ? <MicOff size={22} /> : <Mic size={22} />}
-                            </button>
+                            <>
+                                <button onClick={toggleMute} style={{
+                                    width: 52, height: 52, borderRadius: '50%',
+                                    background: callMuted ? 'rgba(245,158,11,0.2)' : 'rgba(255,255,255,0.1)',
+                                    border: callMuted ? '2px solid rgba(245,158,11,0.5)' : '2px solid rgba(255,255,255,0.2)',
+                                    color: callMuted ? '#f59e0b' : 'white',
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+                                }}>
+                                    {callMuted ? <MicOff size={22} /> : <Mic size={22} />}
+                                </button>
+                                <button onClick={toggleSpeaker} style={{
+                                    width: 52, height: 52, borderRadius: '50%',
+                                    background: speakerOn ? 'rgba(59,130,246,0.2)' : 'rgba(255,255,255,0.1)',
+                                    border: speakerOn ? '2px solid rgba(59,130,246,0.5)' : '2px solid rgba(255,255,255,0.2)',
+                                    color: speakerOn ? '#3b82f6' : 'white',
+                                    display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'pointer',
+                                }}>
+                                    {speakerOn ? <Volume2 size={22} /> : <VolumeX size={22} />}
+                                </button>
+                            </>
                         )}
                         <button onClick={() => endCall(true, callState === 'ringing' ? 'rejected' : 'ended')} style={{
                             width: 64, height: 64, borderRadius: '50%',

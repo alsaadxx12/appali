@@ -55,3 +55,85 @@ exports.notifyOnNewMessage = functions.firestore
 
         return null;
     });
+
+// Send push notification when a new call is created
+exports.notifyOnIncomingCall = functions.firestore
+    .document("calls/{callId}")
+    .onCreate(async (snap, context) => {
+        const call = snap.data();
+        if (!call) return null;
+
+        const receiverId = call.receiverId;
+        const callerName = call.callerName || "مكالمة واردة";
+
+        if (!receiverId) return null;
+
+        // Get receiver's FCM tokens
+        const userDoc = await admin.firestore().doc(`users/${receiverId}`).get();
+        if (!userDoc.exists) return null;
+
+        const data = userDoc.data() || {};
+        const tokens = data.fcmTokens || (data.fcmToken ? [data.fcmToken] : []);
+        if (!tokens.length) return null;
+
+        const payload = {
+            notification: {
+                title: `📞 ${callerName}`,
+                body: "مكالمة واردة...",
+            },
+            data: {
+                callId: context.params.callId,
+                callerId: call.callerId || "",
+                callerName: callerName,
+                type: "incoming_call",
+            },
+            android: {
+                priority: "high",
+                notification: {
+                    channelId: "calls",
+                    priority: "max",
+                    sound: "default",
+                    vibrateTimingsMillis: [0, 500, 200, 500],
+                },
+            },
+            apns: {
+                payload: {
+                    aps: {
+                        sound: "default",
+                        badge: 1,
+                        contentAvailable: true,
+                    },
+                },
+            },
+            webpush: {
+                headers: {
+                    Urgency: "high",
+                    TTL: "30",
+                },
+                notification: {
+                    requireInteraction: true,
+                    tag: "incoming-call",
+                    renotify: true,
+                    vibrate: [500, 200, 500, 200, 500],
+                },
+            },
+        };
+
+        const res = await admin.messaging().sendEachForMulticast({
+            tokens,
+            ...payload,
+        });
+
+        // Clean up invalid tokens
+        const invalid = [];
+        res.responses.forEach((r, i) => {
+            if (!r.success) invalid.push(tokens[i]);
+        });
+
+        if (invalid.length) {
+            const cleaned = tokens.filter((t) => !invalid.includes(t));
+            await admin.firestore().doc(`users/${receiverId}`).update({ fcmTokens: cleaned });
+        }
+
+        return null;
+    });
