@@ -9,8 +9,50 @@
  */
 
 import * as faceapi from 'face-api.js';
+import { FaceLandmarker, FilesetResolver } from '@mediapipe/tasks-vision';
 import { db } from '../firebase';
 import { doc, setDoc, getDoc } from 'firebase/firestore';
+
+// ============================================================
+// MediaPipe FaceLandmarker — 3D Depth for Anti-Spoofing
+// ============================================================
+
+let mediapipeLandmarker: FaceLandmarker | null = null;
+let mediapipeLoading = false;
+
+async function initMediaPipeLandmarker(): Promise<FaceLandmarker | null> {
+    if (mediapipeLandmarker) return mediapipeLandmarker;
+    if (mediapipeLoading) {
+        // Wait for existing load
+        for (let i = 0; i < 50; i++) {
+            await new Promise(r => setTimeout(r, 200));
+            if (mediapipeLandmarker) return mediapipeLandmarker;
+        }
+        return null;
+    }
+    mediapipeLoading = true;
+    try {
+        const vision = await FilesetResolver.forVisionTasks(
+            'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm'
+        );
+        mediapipeLandmarker = await FaceLandmarker.createFromOptions(vision, {
+            baseOptions: {
+                modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task',
+                delegate: 'GPU',
+            },
+            runningMode: 'VIDEO',
+            numFaces: 1,
+            outputFaceBlendshapes: false,
+            outputFacialTransformationMatrixes: false,
+        });
+        console.log('✅ MediaPipe FaceLandmarker loaded (3D depth enabled)');
+        return mediapipeLandmarker;
+    } catch (err) {
+        console.warn('⚠️ MediaPipe FaceLandmarker failed to load:', err);
+        mediapipeLoading = false;
+        return null;
+    }
+}
 
 const MODEL_URL = 'https://cdn.jsdelivr.net/gh/justadudewhohacks/face-api.js@0.22.2/weights';
 const FACE_KEY = 'face_data_';
@@ -260,6 +302,8 @@ export interface LivenessTracker {
     // Movement continuity
     faceSizeHistory: number[];   // Track face bounding box size changes
     positionJumps: number;       // Count of sudden position jumps
+    // 3D Depth — MediaPipe
+    depthScores: number[];       // 0-100 per frame, higher = more 3D
     // Session
     session: VerificationSession;
 }
@@ -286,6 +330,7 @@ export function createLivenessTracker(): LivenessTracker {
         spoofScore: 0,
         faceSizeHistory: [],
         positionJumps: 0,
+        depthScores: [],
         session: createVerificationSession(),
     };
 }
@@ -495,6 +540,81 @@ function detectChallengeDirection(
 }
 
 // ============================================================
+// 3D Depth Liveness Check — MediaPipe FaceLandmarker
+// Compares Z-depth between nose/forehead vs ears/jawline
+// Real face: high Z variance. Flat photo: uniform Z.
+// ============================================================
+
+export async function checkDepthLiveness(video: HTMLVideoElement): Promise<number> {
+    try {
+        const landmarker = await initMediaPipeLandmarker();
+        if (!landmarker) return -1; // MediaPipe not available
+
+        const result = landmarker.detectForVideo(video, performance.now());
+        if (!result.faceLandmarks || result.faceLandmarks.length === 0) return -1;
+
+        const landmarks = result.faceLandmarks[0];
+
+        // Key landmark indices (MediaPipe 468 landmarks):
+        // Nose tip = 1, Nose bridge = 6
+        // Left ear = 234, Right ear = 454
+        // Chin = 152, Forehead = 10
+        // Left cheek = 50, Right cheek = 280
+        // Left eye outer = 33, Right eye outer = 263
+
+        const noseTipZ = landmarks[1]?.z ?? 0;
+        const noseBridgeZ = landmarks[6]?.z ?? 0;
+        const foreheadZ = landmarks[10]?.z ?? 0;
+        const chinZ = landmarks[152]?.z ?? 0;
+        const leftEarZ = landmarks[234]?.z ?? 0;
+        const rightEarZ = landmarks[454]?.z ?? 0;
+        const leftCheekZ = landmarks[50]?.z ?? 0;
+        const rightCheekZ = landmarks[280]?.z ?? 0;
+        const leftEyeZ = landmarks[33]?.z ?? 0;
+        const rightEyeZ = landmarks[263]?.z ?? 0;
+
+        // Collect all Z values
+        const zValues = [
+            noseTipZ, noseBridgeZ, foreheadZ, chinZ,
+            leftEarZ, rightEarZ, leftCheekZ, rightCheekZ,
+            leftEyeZ, rightEyeZ
+        ];
+
+        // 1. Overall Z variance
+        const meanZ = zValues.reduce((a, b) => a + b, 0) / zValues.length;
+        const zVariance = zValues.reduce((sum, z) => sum + (z - meanZ) ** 2, 0) / zValues.length;
+
+        // 2. Nose protrusion: nose should be significantly closer (more negative Z) than ears
+        const avgEarZ = (leftEarZ + rightEarZ) / 2;
+        const noseProtrusion = Math.abs(noseTipZ - avgEarZ);
+
+        // 3. Cheek depth: cheeks should be between nose and ears
+        const avgCheekZ = (leftCheekZ + rightCheekZ) / 2;
+        const cheekDepth = Math.abs(avgCheekZ - noseTipZ);
+
+        // 4. Facial curvature: forehead → nose → chin should form an arc
+        const arcDepth = Math.abs(noseTipZ - (foreheadZ + chinZ) / 2);
+
+        // Combine factors into a depth score (0-100)
+        // Real face: zVariance ~0.001-0.01, noseProtrusion ~0.02-0.08
+        // Flat photo: zVariance ~0.0001, noseProtrusion ~0.001
+        const varianceScore = Math.min(zVariance / 0.002, 1) * 35;
+        const protrusionScore = Math.min(noseProtrusion / 0.03, 1) * 30;
+        const cheekScore = Math.min(cheekDepth / 0.015, 1) * 20;
+        const arcScore = Math.min(arcDepth / 0.01, 1) * 15;
+
+        const depthScore = Math.min(Math.round(varianceScore + protrusionScore + cheekScore + arcScore), 100);
+
+        console.log(`🧊 Depth: score=${depthScore}, var=${zVariance.toFixed(6)}, nose=${noseProtrusion.toFixed(4)}, cheek=${cheekDepth.toFixed(4)}, arc=${arcDepth.toFixed(4)}`);
+
+        return depthScore;
+    } catch (err) {
+        console.warn('Depth check error:', err);
+        return -1;
+    }
+}
+
+// ============================================================
 // Update Liveness Tracker — called every frame during verification
 // ============================================================
 
@@ -650,37 +770,47 @@ export function calculateAdvancedLivenessScore(tracker: LivenessTracker): {
 
     // --- ANTI-SPOOFING CHECKS ---
 
-    // 1. Challenge compliance (35 points max) — primary anti-spoof
+    // 1. 3D DEPTH (40 points max) — PRIMARY anti-flat-surface check
+    const validDepth = tracker.depthScores.filter(d => d >= 0);
+    const avgDepth = validDepth.length > 0
+        ? validDepth.reduce((a, b) => a + b, 0) / validDepth.length
+        : -1; // -1 means MediaPipe not loaded yet
+    const depthAvailable = avgDepth >= 0;
+    const depthScore = depthAvailable ? Math.min((avgDepth / 60) * 40, 40) : 0;
+
+    // 2. Challenge compliance (25 points max)
     const challengeProgress = (tracker.challengeIndex / tracker.challenge.length) * 100;
-    const challengeScore = tracker.challengeCompleted ? 35 : (tracker.challengeIndex / tracker.challenge.length) * 25;
+    const challengeScore = tracker.challengeCompleted ? 25 : (tracker.challengeIndex / tracker.challenge.length) * 18;
 
-    // 2. Screen spoof detection (25 points max) — moiré + flicker + uniformity
+    // 3. Screen spoof detection (15 points max) — moiré + flicker + uniformity
     const spoofPenalty = Math.min(tracker.spoofScore / 100, 1);
-    const antiSpoofScore = (1 - spoofPenalty) * 25; // Low spoof = high score
+    const antiSpoofScore = (1 - spoofPenalty) * 15;
 
-    // 3. Movement continuity (20 points max) — smooth = real, jumps = fake
+    // 4. Movement continuity (10 points max)
     const jumpPenalty = Math.min(tracker.positionJumps / 5, 1);
-    const continuityScore = (1 - jumpPenalty) * 20;
+    const continuityScore = (1 - jumpPenalty) * 10;
     const continuityOk = tracker.positionJumps < 3;
 
-    // 4. Texture + EAR variance (20 points max combined)
+    // 5. Texture + EAR variance (10 points max combined)
     const avgTexture = tracker.textureScores.length > 0
         ? tracker.textureScores.reduce((a, b) => a + b, 0) / tracker.textureScores.length
         : 0;
-    const texturePoints = Math.min((avgTexture / 12), 1) * 10;
+    const texturePoints = Math.min((avgTexture / 12), 1) * 5;
     const earVariance = tracker.earMax - tracker.earMin;
-    const earPoints = Math.min((earVariance / 0.06), 1) * 10;
+    const earPoints = Math.min((earVariance / 0.06), 1) * 5;
 
     const blinkDetected = tracker.blinkCount >= 1;
-    const blinkBonus = blinkDetected ? 5 : 0;
+    const blinkBonus = blinkDetected ? 3 : 0;
 
     const totalScore = Math.min(Math.round(
-        challengeScore + antiSpoofScore + continuityScore + texturePoints + earPoints + blinkBonus
+        depthScore + challengeScore + antiSpoofScore + continuityScore + texturePoints + earPoints + blinkBonus
     ), 100);
 
     // Generate user-facing details
     let details = '';
-    if (tracker.spoofScore > 60) {
+    if (depthAvailable && avgDepth < 15 && validDepth.length >= 4) {
+        details = '⛔ تم كشف سطح مستوي — استخدم وجهك الحقيقي';
+    } else if (tracker.spoofScore > 60) {
         details = '⚠️ تم كشف شاشة — استخدم وجهك الحقيقي';
     } else if (!continuityOk) {
         details = '⚠️ حركة غير طبيعية — لا تغيّر الصورة';
@@ -697,7 +827,7 @@ export function calculateAdvancedLivenessScore(tracker: LivenessTracker): {
         details = 'تم التحقق ✅';
     }
 
-    console.log(`🛡️ AntiSpoof: score=${totalScore}, challenge=${challengeScore.toFixed(0)}/35, spoof=${antiSpoofScore.toFixed(0)}/25(raw:${tracker.spoofScore}), cont=${continuityScore.toFixed(0)}/20(jumps:${tracker.positionJumps}), tex=${texturePoints.toFixed(0)}, ear=${earPoints.toFixed(0)}, blink=${blinkBonus}`);
+    console.log(`🛡️ AntiSpoof: score=${totalScore}, depth=${depthScore.toFixed(0)}/40(avg:${avgDepth.toFixed(1)},n=${validDepth.length}), challenge=${challengeScore.toFixed(0)}/25, spoof=${antiSpoofScore.toFixed(0)}/15(raw:${tracker.spoofScore}), cont=${continuityScore.toFixed(0)}/10(jumps:${tracker.positionJumps}), tex=${texturePoints.toFixed(0)}, ear=${earPoints.toFixed(0)}, blink=${blinkBonus}`);
 
     return {
         score: totalScore,
@@ -992,6 +1122,20 @@ export async function verifyFaceAdvanced(
         // --- ADVANCED ANTI-SPOOFING LIVENESS CHECK ---
         if (livenessTracker) {
             const liveness = calculateAdvancedLivenessScore(livenessTracker);
+
+            // HARD FAIL: 3D depth too flat (photo/screen)
+            const validDepthScores = livenessTracker.depthScores.filter(d => d >= 0);
+            const avgDepthScore = validDepthScores.length > 0
+                ? validDepthScores.reduce((a, b) => a + b, 0) / validDepthScores.length
+                : -1;
+            if (avgDepthScore >= 0 && avgDepthScore < 15 && validDepthScores.length >= 4) {
+                return {
+                    success: false,
+                    error: '⛔ تم كشف صورة مسطّحة — يجب أن يكون وجهك الحقيقي أمام الكاميرا',
+                    confidence,
+                    livenessScore: liveness.score,
+                };
+            }
 
             // HARD FAIL: Screen spoof detected
             if (liveness.spoofScore > 60 && livenessTracker.frames.length >= 6) {

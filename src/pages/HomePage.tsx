@@ -26,6 +26,7 @@ import {
     createLivenessTracker,
     LivenessTracker,
     ChallengeStep,
+    checkDepthLiveness,
 } from '../utils/faceAuth';
 
 export default function HomePage() {
@@ -62,6 +63,7 @@ export default function HomePage() {
     const [challengeIndex, setChallengeIndex] = useState(0);
     const [challengeCompleted, setChallengeCompleted] = useState(false);
     const [spoofDetected, setSpoofDetected] = useState(false);
+    const [depthOk, setDepthOk] = useState(false);
 
     const SESSION_TIMEOUT = 30 * 60 * 1000; // 30 minutes
 
@@ -278,6 +280,19 @@ export default function HomePage() {
                     setSpoofDetected(livenessTrackerRef.current.spoofScore > 60);
                     // Update challenge steps for UI
                     setChallengeSteps([...livenessTrackerRef.current.challenge]);
+                    // Check depth scores
+                    const validD = livenessTrackerRef.current.depthScores.filter(d => d >= 0);
+                    const avgD = validD.length > 0 ? validD.reduce((a, b) => a + b, 0) / validD.length : -1;
+                    setDepthOk(avgD >= 30);
+                }
+
+                // Run depth check every 3rd frame (async, non-blocking)
+                if (livenessTrackerRef.current && videoRef.current && attempts % 3 === 0) {
+                    checkDepthLiveness(videoRef.current).then(score => {
+                        if (livenessTrackerRef.current) {
+                            livenessTrackerRef.current.depthScores.push(score);
+                        }
+                    });
                 }
 
                 drawFaceOverlayWithBeam(
@@ -678,6 +693,16 @@ export default function HomePage() {
                                 <div style={{
                                     display: 'flex', gap: 6, marginTop: 2,
                                 }}>
+                                    <span style={{
+                                        padding: '3px 10px', borderRadius: 12,
+                                        background: depthOk ? 'rgba(16,185,129,0.1)' : 'rgba(6,182,212,0.08)',
+                                        border: `1px solid ${depthOk ? 'rgba(16,185,129,0.25)' : 'rgba(6,182,212,0.15)'}`,
+                                        fontSize: 9, fontWeight: 800,
+                                        color: depthOk ? '#34d399' : '#06b6d4',
+                                        display: 'flex', alignItems: 'center', gap: 4,
+                                    }}>
+                                        🧊 3D Depth {depthOk ? '✓' : '...'}
+                                    </span>
                                     <span style={{
                                         padding: '3px 10px', borderRadius: 12,
                                         background: 'rgba(99,102,241,0.08)',
